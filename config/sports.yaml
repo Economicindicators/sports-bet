@@ -1,0 +1,64 @@
+# スポーツ・リーグ設定
+sports:
+  baseball:
+    code: baseball
+    name: 野球
+    scoring_type: runs
+    leagues:
+      - code: npb
+        name: NPB
+        source_site: handenomori
+        source_section: jpb
+        has_draw: false
+      - code: mlb
+        name: MLB
+        source_site: handenomori
+        source_section: mlb
+        has_draw: false
+
+  soccer:
+    code: soccer
+    name: サッカー
+    scoring_type: goals
+    leagues:
+      - code: jleague
+        name: Jリーグ
+        source_site: football_hande
+        source_section: jleague
+        has_draw: true
+      - code: premier
+        name: プレミアリーグ
+        source_site: football_hande
+        source_section: premier
+        has_draw: true
+      - code: laliga
+        name: ラ・リーガ
+        source_site: football_hande
+        source_section: laliga
+        has_draw: true
+      - code: seriea
+        name: セリエA
+        source_site: football_hande
+        source_section: seriea
+        has_draw: true
+      - code: bundesliga
+        name: ブンデスリーガ
+        source_site: football_hande
+        source_section: bundesliga
+        has_draw: true
+
+  basketball:
+    code: basketball
+    name: バスケットボール
+    scoring_type: points
+    leagues:
+      - code: nba
+        name: NBA
+        source_site: b_handicap
+        source_section: nba
+        has_draw: false
+      - code: bleague
+        name: Bリーグ
+        source_site: b_handicap
+        source_section: bleague
+        has_draw: false
