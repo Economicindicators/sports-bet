@@ -15,6 +15,8 @@ st.set_page_config(
     layout="wide",
 )
 
+import traceback
+
 try:
     import pandas as pd
     import numpy as np
@@ -26,6 +28,7 @@ try:
     from config.settings import DB_PATH
 except Exception as e:
     st.error(f"Import error: {e}")
+    st.code(traceback.format_exc())
     st.stop()
 
 try:
@@ -38,6 +41,9 @@ try:
     sess.close()
 except Exception as e:
     st.error(f"DB接続エラー: {e}")
+    st.code(traceback.format_exc())
+    st.write(f"DB path: `{DB_PATH}`")
+    st.write(f"DB exists: `{DB_PATH.exists()}`")
     st.stop()
 
 # --- サイドバー ---
