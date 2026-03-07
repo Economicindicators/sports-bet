@@ -35,6 +35,7 @@ def load_matches_df(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     session: Optional[Session] = None,
+    include_scheduled: bool = False,
 ) -> pd.DataFrame:
     """DBから試合データをDataFrameとして読み込む"""
     sess = session or get_session()
@@ -66,7 +67,10 @@ def load_matches_df(
     if end_date:
         q = q.filter(Match.date <= end_date)
 
-    q = q.filter(Match.status == "finished")
+    if include_scheduled:
+        q = q.filter(Match.status.in_(["finished", "scheduled"]))
+    else:
+        q = q.filter(Match.status == "finished")
     q = q.order_by(Match.date)
 
     rows = q.all()
@@ -109,7 +113,9 @@ def build_features(
         sport_code = df["sport_code"].iloc[0]
 
     # ターゲット: ハンデ有利チームが5分勝ち以上 (payout >= 1.5)
-    df["target"] = (df["payout_rate"] >= FAVORABLE_PAYOUT_THRESHOLD).astype(int)
+    # scheduled試合はpayout_rateがNone → targetもNaN
+    df["target"] = pd.to_numeric(df["payout_rate"], errors="coerce")
+    df["target"] = (df["target"] >= FAVORABLE_PAYOUT_THRESHOLD).where(df["payout_rate"].notna()).astype(float)
 
     # ハンデチームがホームかどうか
     df["handicap_team_is_home"] = (

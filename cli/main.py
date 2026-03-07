@@ -248,7 +248,7 @@ def recommend(
         target_date = parse_date(date_str)
 
     model = load_model(sport, version)
-    df = load_matches_df(sport_code=sport)
+    df = load_matches_df(sport_code=sport, include_scheduled=True)
 
     if df.empty:
         console.print("[red]データがありません[/red]")
