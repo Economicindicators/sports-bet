@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import sys
+import os
+import traceback
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# プロジェクトルートをパスに追加
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st
 
@@ -15,7 +19,9 @@ st.set_page_config(
     layout="wide",
 )
 
-import traceback
+# デバッグ情報
+st.sidebar.caption(f"Python {sys.version}")
+st.sidebar.caption(f"Root: {PROJECT_ROOT}")
 
 try:
     import pandas as pd
@@ -23,9 +29,11 @@ try:
     import plotly.express as px
     from datetime import date, timedelta
     from sqlalchemy import func
+    from config.settings import DB_PATH
+    st.sidebar.caption(f"DB: {DB_PATH}")
+    st.sidebar.caption(f"DB exists: {DB_PATH.exists()}")
     from database.models import get_session, Match, HandicapData, Team
     from config.constants import MIN_EV_THRESHOLD, KELLY_FRACTION
-    from config.settings import DB_PATH
 except Exception as e:
     st.error(f"Import error: {e}")
     st.code(traceback.format_exc())
@@ -42,8 +50,6 @@ try:
 except Exception as e:
     st.error(f"DB接続エラー: {e}")
     st.code(traceback.format_exc())
-    st.write(f"DB path: `{DB_PATH}`")
-    st.write(f"DB exists: `{DB_PATH.exists()}`")
     st.stop()
 
 # --- サイドバー ---
