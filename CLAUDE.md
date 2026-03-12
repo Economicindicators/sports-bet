@@ -56,18 +56,21 @@ python -m pytest tests/ -v
 - SQLAlchemy (SQLite)
 - LightGBM (binary classifier, スポーツ別モデル)
 - requests + BeautifulSoup (スクレイピング)
+- Playwright + Chrome (OddsPortal)
 - Typer (CLI) / Streamlit (Web)
 
-## DB (8テーブル)
-Sport → League → Team → Match → HandicapData, Prediction
+## DB (9テーブル)
+Sport → League → Team → Match → HandicapData, Prediction, BookmakerOdds
                    ↓
                  Player (投手マスタ等)
 
-## 特徴量 (41個, 野球の場合)
+## 特徴量 (116個, 野球の場合)
 **共通** (32個): ハンデ系(5), チーム成績(12), H2H(4), 順位(5), 日程(6)
 **野球固有** (9個): 投手勝率, 投手ERA, ERA差, 登板数, 合計得点
 **サッカー固有**: クリーンシート率, 引分率, 平均ゴール数
 **バスケ固有**: ペース, 僅差率, 大量リード率
+**オッズ** (10個): consensus確率, sharp確率, dispersion, sharp-soft gap, overround, best odds
+**セイバーメトリクス** (16個, NPBのみ): チームOPS, RPG, 先発ローテERA/FIP/WHIP/K9, OPS差, ERA差
 
 ## ML設計
 - ターゲット: ハンデ有利チームが5分勝ち以上 (payout >= 1.5)
@@ -81,20 +84,32 @@ Sport → League → Team → Match → HandicapData, Prediction
 - [x] Phase 2: スクレイパー (base, handenomori, football_hande, b_handicap, manager)
 - [x] Phase 3: 特徴量 (41個) + LightGBMモデル + 時系列CV + 学習パイプライン
 - [x] Phase 4: EV計算, Kelly基準, フィルタ, Walk-forwardバックテスト
-- [ ] Phase 5: Streamlitダッシュボード (7タブ)
+- [x] Phase 5.1: 外部データ統合 — OddsPortal, DELTA Inc (1point02.jp)
+- [ ] Phase 5.2: 外部データ統合 — Flashscore, Sports Navi (後回し)
+- [ ] Phase 6: Streamlitダッシュボード (7タブ)
 
-## 次のステップ
-1. バックフィル実行 (過去2年分のデータ収集)
-2. モデル学習 + CV検証
-3. バックテストでEV閾値最適化
-4. Streamlitダッシュボード実装
+## コマンド (追加)
+```bash
+# セイバーメトリクス表示
+python -m cli.main sabermetrics 2025
+
+# オッズ取得 (OddsPortal)
+python -m cli.main odds nba --source oddsportal
+python -m cli.main odds premier --source oddsportal
+
+# オッズ取得 (The Odds API)
+python -m cli.main odds nba --source odds_api
+```
 
 ## スクレイパー構造
-| サイト | クラス | 対象 | HTML構造 |
-|--------|--------|------|----------|
-| ハンデの森 | HandenomoriScraper | NPB/MLB | section > div.game-detail2, table.single-handi |
-| ハンデの嵐 | FootballHandeScraper | サッカー | table.index-handi-table, win-cell, "0半3"形式 |
-| ハンディマン | BHandicapScraper | バスケ | table.single-gamedata, span.handhi |
+| サイト | クラス | 対象 | 方式 |
+|--------|--------|------|------|
+| ハンデの森 | HandenomoriScraper | NPB/MLB | requests + BS4 |
+| ハンデの嵐 | FootballHandeScraper | サッカー | requests + BS4 |
+| ハンディマン | BHandicapScraper | バスケ | requests + BS4 |
+| OddsPortal | OddsPortalScraper | 全スポーツ | Playwright + Chrome |
+| 1point02.jp | DeltaScraper | NPBセイバー | requests + BS4 |
+| The Odds API | odds_api.py | 全スポーツ | REST API |
 
 ## keiba-aiからの流用元
 - `~/Documents/06_プロダクト開発/keiba-ai/`

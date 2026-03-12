@@ -11,6 +11,7 @@ HTML構造:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -39,6 +40,7 @@ class GameData:
     handicap_team: str  # ハンデを背負うチーム名
     handicap_value: float
     league_code: str
+    handicap_display: str = ""  # 原文表記 (例: "0半5", "0/3")
     home_pitcher: Optional[str] = None  # 野球: 予告先発
     away_pitcher: Optional[str] = None
 
@@ -48,15 +50,49 @@ class HandenomoriScraper(BaseScraper):
 
     BASE_URL = SOURCES["handenomori"]["base_url"]
 
+    LOGIN_URL = "https://handenomori.com/membership-login/"
+
+    def _ensure_login(self) -> None:
+        """ハンデの森にログイン（環境変数から認証情報取得）"""
+        user = os.environ.get("HANDENOMORI_USER")
+        pw = os.environ.get("HANDENOMORI_PASS")
+        if user and pw:
+            self.login(self.LOGIN_URL, {
+                "swpm_login_origination_flag": "1",
+                "swpm_user_name": user,
+                "swpm_password": pw,
+                "rememberme": "on",
+                "swpm-login": "Log In",
+            })
+
     def _build_url(self, section: str, d: date) -> str:
         return f"{self.BASE_URL}/{section}/{format_date(d)}"
 
+    @staticmethod
+    def parse_handicap_value(text: str) -> float:
+        """ハンデ値テキストを数値に変換。'半'=.5, '/'=.25/.75 対応"""
+        text = text.strip()
+        if not text:
+            raise ValueError("empty handicap")
+        # "1半5" → 1.5, "0半5" → 0.5, "2半2" → 2.5
+        if "半" in text:
+            parts = text.split("半")
+            base = int(parts[0]) if parts[0] else 0
+            return base + 0.5
+        # "0/3" → 0.75 (Asian quarter line: X/Y = (X+Y)/2)
+        if "/" in text:
+            parts = text.split("/")
+            return (float(parts[0]) + float(parts[1])) / 2
+        return float(text)
+
     def scrape_date(self, league_code: str, d: date) -> list[GameData]:
         """指定日の全試合データを取得"""
-        section_map = {"npb": "jpb", "mlb": "mlb"}
+        section_map = {"npb": "jpb", "mlb": "mlb", "wbc": "wbc"}
         section = section_map.get(league_code)
         if not section:
             raise ValueError(f"Unknown league: {league_code}")
+
+        self._ensure_login()
 
         url = self._build_url(section, d)
         try:
@@ -154,21 +190,23 @@ class HandenomoriScraper(BaseScraper):
                     # ホーム側にハンデ値 → ホームが有利（ハンデを背負う）
                     handicap_team = home_team
                     try:
-                        handicap_value = float(home_handi)
+                        handicap_value = self.parse_handicap_value(home_handi)
                     except ValueError:
                         return None
                 elif away_handi:
                     # アウェイ側にハンデ値 → アウェイが有利
                     handicap_team = away_team
                     try:
-                        handicap_value = float(away_handi)
+                        handicap_value = self.parse_handicap_value(away_handi)
                     except ValueError:
                         return None
                 else:
-                    return None  # ハンデなし
+                    pass  # ハンデ未発表 — 試合情報のみ保存
 
+        # ハンデ未発表でもhome_teamをデフォルトに設定して試合を保存
         if not handicap_team:
-            return None
+            handicap_team = home_team
+            handicap_value = 0.0
 
         return GameData(
             date=d,
@@ -187,7 +225,7 @@ class HandenomoriScraper(BaseScraper):
 
     def get_available_dates(self, league_code: str) -> list[date]:
         """過去データのインデックスページから利用可能な日付一覧を取得"""
-        section_map = {"npb": "jpb", "mlb": "mlb"}
+        section_map = {"npb": "jpb", "mlb": "mlb", "wbc": "wbc"}
         section = section_map.get(league_code)
         url = f"{self.BASE_URL}/{section}/"
 
@@ -197,7 +235,7 @@ class HandenomoriScraper(BaseScraper):
         for link in soup.find_all("a"):
             href = link.get("href", "")
             # /jpb/20250801 のようなパターンを探す
-            match = re.search(r"/(?:jpb|mlb)/(\d{8})", href)
+            match = re.search(r"/(?:jpb|mlb|wbc)/(\d{8})", href)
             if match:
                 date_str = match.group(1)
                 try:

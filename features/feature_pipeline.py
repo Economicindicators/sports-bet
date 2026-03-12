@@ -18,6 +18,9 @@ from features.matchup_features import add_matchup_features
 from features.league_features import add_league_features
 from features.schedule_features import add_schedule_features
 from features.elo_features import add_elo_features
+from features.form_features import add_form_features
+from features.line_movement_features import add_line_movement_features
+from features.odds_features import add_odds_features
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +147,33 @@ def build_features(
     logger.info("Adding schedule features...")
     df = add_schedule_features(df)
 
+    # --- 直近フォーム特徴量 ---
+    logger.info("Adding form features...")
+    df = add_form_features(df, sport_code)
+
+    # --- ライン移動特徴量 ---
+    logger.info("Adding line movement features...")
+    df = add_line_movement_features(df)
+
+    # --- ブックメーカーオッズ特徴量 ---
+    logger.info("Adding bookmaker odds features...")
+    df = add_odds_features(df)
+
+    # --- 高度特徴量 ---
+    from features.advanced_features import add_advanced_features
+    logger.info("Adding advanced features...")
+    df = add_advanced_features(df)
+
     # --- スポーツ固有特徴量 ---
     if sport_code == "baseball":
         from features.sport_specific.baseball import add_baseball_features
         logger.info("Adding baseball features...")
         df = add_baseball_features(df)
+
+        # セイバーメトリクス (NPBのみ)
+        from features.sabermetrics_features import add_sabermetrics_features
+        logger.info("Adding sabermetrics features...")
+        df = add_sabermetrics_features(df)
     elif sport_code == "soccer":
         from features.sport_specific.soccer import add_soccer_features
         logger.info("Adding soccer features...")

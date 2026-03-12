@@ -8,8 +8,12 @@ import random
 import time
 from pathlib import Path
 
+import urllib3
 import requests
 from bs4 import BeautifulSoup
+
+# handenomori.comのSSL証明書が期限切れのため警告を抑制
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config.constants import (
     MAX_RETRIES,
@@ -26,12 +30,16 @@ logger = logging.getLogger(__name__)
 class BaseScraper:
     """レート制限、キャッシュ、リトライ機能付きベーススクレイパー"""
 
+    # SSL検証を無効にするドメイン (証明書期限切れ対応)
+    SSL_VERIFY_SKIP_DOMAINS: set[str] = {"handenomori.com"}
+
     def __init__(self, use_cache: bool = True, cache_dir: Path | None = None):
         self.session = requests.Session()
         self.use_cache = use_cache
         self.cache_dir = cache_dir or CACHE_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._last_request_time = 0.0
+        self._logged_in = False
 
     def _get_headers(self) -> dict:
         return {
@@ -50,7 +58,7 @@ class BaseScraper:
         return self.cache_dir / f"{key}.html"
 
     def _read_cache(self, url: str) -> str | None:
-        if not self.use_cache:
+        if not self.use_cache or self._logged_in:
             return None
         path = self._get_cache_path(url)
         if path.exists():
@@ -63,6 +71,36 @@ class BaseScraper:
             return
         path = self._get_cache_path(url)
         path.write_text(content, encoding="utf-8")
+
+    def _should_skip_ssl(self, url: str) -> bool:
+        """SSL検証をスキップすべきドメインか判定"""
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        return any(d in host for d in self.SSL_VERIFY_SKIP_DOMAINS)
+
+    def login(self, login_url: str, payload: dict) -> bool:
+        """サイトにログインしてセッションCookieを取得"""
+        if self._logged_in:
+            return True
+        try:
+            self._rate_limit()
+            r = self.session.post(
+                login_url, data=payload,
+                headers=self._get_headers(),
+                timeout=REQUEST_TIMEOUT,
+                allow_redirects=True,
+                verify=not self._should_skip_ssl(login_url),
+            )
+            self._last_request_time = time.time()
+            self._logged_in = r.status_code == 200
+            if self._logged_in:
+                logger.info(f"Logged in to {login_url}")
+            else:
+                logger.warning(f"Login failed ({r.status_code})")
+            return self._logged_in
+        except Exception as e:
+            logger.warning(f"Login error: {e}")
+            return False
 
     def _rate_limit(self) -> None:
         elapsed = time.time() - self._last_request_time
@@ -83,6 +121,7 @@ class BaseScraper:
                     url,
                     headers=self._get_headers(),
                     timeout=REQUEST_TIMEOUT,
+                    verify=not self._should_skip_ssl(url),
                 )
                 self._last_request_time = time.time()
                 response.raise_for_status()

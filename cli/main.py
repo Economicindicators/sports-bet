@@ -294,6 +294,73 @@ def recommend(
 
 
 @app.command()
+def sabermetrics(
+    season: int = typer.Argument(2025, help="シーズン年"),
+):
+    """1point02.jp からNPBセイバーメトリクスを取得して表示"""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from scraper.delta_scraper import DeltaScraper
+
+    scraper = DeltaScraper(use_cache=False)
+    console.print(f"[bold blue]NPBセイバーメトリクス取得: {season}[/bold blue]")
+
+    agg = scraper.get_team_aggregate(season)
+
+    table = Table(title=f"チーム別セイバーメトリクス ({season})")
+    table.add_column("チーム", style="cyan")
+    table.add_column("OPS", justify="right")
+    table.add_column("RPG", justify="right")
+    table.add_column("rERA", justify="right", style="green")
+    table.add_column("rFIP", justify="right")
+    table.add_column("rWHIP", justify="right")
+    table.add_column("rK9", justify="right")
+    table.add_column("Depth", justify="right")
+
+    for team, stats in sorted(agg.items(), key=lambda x: x[1].get("team_ops", 0), reverse=True):
+        table.add_row(
+            team,
+            f"{stats.get('team_ops', 0):.3f}",
+            f"{stats.get('team_runs_per_game', 0):.2f}",
+            f"{stats.get('rotation_era', 0):.2f}" if stats.get('rotation_era') else "-",
+            f"{stats.get('rotation_fip', 0):.2f}" if stats.get('rotation_fip') else "-",
+            f"{stats.get('rotation_whip', 0):.3f}" if stats.get('rotation_whip') else "-",
+            f"{stats.get('rotation_k9', 0):.2f}" if stats.get('rotation_k9') else "-",
+            str(stats.get("rotation_depth", 0)),
+        )
+    console.print(table)
+
+
+@app.command()
+def odds(
+    league: str = typer.Argument(help="リーグコード (npb/mlb/nba/premier/etc)"),
+    source: str = typer.Option("oddsportal", "--source", "-s", help="ソース (oddsportal/odds_api)"),
+    date_str: str = typer.Option(None, "--date", "-d", help="日付 (YYYYMMDD)"),
+):
+    """ブックメーカーオッズを取得してDB保存する"""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    from scraper.odds_manager import OddsManager
+    from scraper.date_utils import parse_date
+
+    target_date = parse_date(date_str) if date_str else None
+    manager = OddsManager()
+
+    try:
+        if source == "oddsportal":
+            console.print(f"[bold blue]OddsPortal からオッズ取得: {league}[/bold blue]")
+            count = manager.scrape_oddsportal(league, target_date)
+        elif source == "odds_api":
+            console.print(f"[bold blue]Odds API からオッズ取得: {league}[/bold blue]")
+            count = manager.scrape_odds_api(league)
+        else:
+            console.print(f"[red]不明なソース: {source}[/red]")
+            return
+        console.print(f"[bold green]{count} 件のオッズを保存しました[/bold green]")
+    finally:
+        manager.close()
+
+
+@app.command()
 def models():
     """保存済みモデルの一覧を表示する"""
     from models.registry import list_models

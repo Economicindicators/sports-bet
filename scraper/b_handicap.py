@@ -132,8 +132,13 @@ class BHandicapScraper(BaseScraper):
             except ValueError:
                 return None
         else:
-            # ハンデなし（まだ発表されていない）
-            return None
+            # ハンデなし（まだ発表されていない）— 試合情報のみ保存
+            pass
+
+        # ハンデ未発表でもhome_teamをデフォルトに設定して試合を保存
+        if not handicap_team:
+            handicap_team = home_team
+            handicap_value = 0.0
 
         # スコア
         home_score = None

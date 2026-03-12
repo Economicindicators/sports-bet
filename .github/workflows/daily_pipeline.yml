@@ -1,0 +1,82 @@
+name: Daily Prediction Pipeline
+
+on:
+  schedule:
+    # JST 08:00 = UTC 23:00 (前日), JST 20:00 = UTC 11:00
+    - cron: "0 23 * * *"
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+    inputs:
+      sport:
+        description: "Sport to predict (blank = all)"
+        required: false
+        type: string
+      dry_run:
+        description: "Dry run (no Turso save)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      # SQLite DB を日次キャッシュ (特徴量計算に過去データが必要)
+      - name: Restore DB cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/sports_bet.db
+          key: sports-bet-db-${{ github.run_id }}
+          restore-keys: |
+            sports-bet-db-
+
+      # Turso CLI インストール & 認証
+      - name: Setup Turso CLI
+        run: |
+          curl -sSfL https://get.tur.so/install.sh | bash
+          echo "$HOME/.turso" >> $GITHUB_PATH
+        env:
+          TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
+
+      - name: Authenticate Turso
+        run: turso auth token
+        env:
+          TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
+
+      # パイプライン実行
+      - name: Run pipeline
+        run: |
+          ARGS="--days-back 7"
+          if [ -n "${{ inputs.sport }}" ]; then
+            ARGS="$ARGS --sport ${{ inputs.sport }}"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python daily_pipeline.py $ARGS
+        env:
+          HANDENOMORI_USER: ${{ secrets.HANDENOMORI_USER }}
+          HANDENOMORI_PASS: ${{ secrets.HANDENOMORI_PASS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
+
+      # 更新されたDBをキャッシュ保存 (次回実行で過去データとして利用)
+      - name: Save DB cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/sports_bet.db
+          key: sports-bet-db-${{ github.run_id }}

@@ -15,6 +15,11 @@ sports:
         source_site: handenomori
         source_section: mlb
         has_draw: false
+      - code: wbc
+        name: WBC
+        source_site: handenomori
+        source_section: wbc
+        has_draw: false
 
   soccer:
     code: soccer
@@ -45,6 +50,11 @@ sports:
         name: ブンデスリーガ
         source_site: football_hande
         source_section: bundesliga
+        has_draw: true
+      - code: cl
+        name: チャンピオンズリーグ
+        source_site: football_hande
+        source_section: cl
         has_draw: true
 
   basketball:

@@ -10,9 +10,14 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from config.constants import CV_FOLDS, CV_GAP_DAYS, EARLY_STOPPING_ROUNDS
+from config.constants import CV_FOLDS, CV_GAP_DAYS, EARLY_STOPPING_ROUNDS, LGBM_BASEBALL_PARAMS
 from config.settings import MODELS_DIR
 from models.lgbm_model import LightGBMModel
+
+# スポーツ別LightGBMパラメータ
+SPORT_LGBM_PARAMS = {
+    "baseball": LGBM_BASEBALL_PARAMS,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,7 @@ def time_series_cv(
     Returns:
         各foldのメトリクスリスト
     """
-    df = df.sort_values("date").reset_index(drop=True)
+    df = df.dropna(subset=["target"]).sort_values("date").reset_index(drop=True)
     dates = df["date"].unique()
     n_dates = len(dates)
 
@@ -77,7 +82,8 @@ def time_series_cv(
             f"val={len(X_val)} ({gap_date}～{val_end_date})"
         )
 
-        model = LightGBMModel()
+        sport_params = SPORT_LGBM_PARAMS.get(None)  # CV uses default
+        model = LightGBMModel(params=sport_params)
         metrics = model.train(
             X_train, y_train, X_val, y_val,
             early_stopping_rounds=EARLY_STOPPING_ROUNDS,
@@ -119,6 +125,9 @@ def train_model(
     """
     df = df.sort_values("date").reset_index(drop=True)
 
+    # targetがNaNの行を除外 (scheduled試合など)
+    df = df.dropna(subset=["target"]).reset_index(drop=True)
+
     # 時系列split
     split_idx = int(len(df) * (1 - val_ratio))
     X_train = df.iloc[:split_idx][feature_cols]
@@ -128,7 +137,8 @@ def train_model(
 
     logger.info(f"Training: {len(X_train)} train, {len(X_val)} val")
 
-    model = LightGBMModel()
+    sport_params = SPORT_LGBM_PARAMS.get(sport_code)
+    model = LightGBMModel(params=sport_params)
     metrics = model.train(
         X_train, y_train, X_val, y_val,
         early_stopping_rounds=EARLY_STOPPING_ROUNDS,
@@ -141,8 +151,67 @@ def train_model(
     return model, metrics
 
 
-def load_model(sport_code: str, model_version: str = "v1") -> LightGBMModel:
-    """保存済みモデルを読み込み"""
+def train_ensemble(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    sport_code: str,
+    model_version: str = "v2",
+    val_ratio: float = 0.2,
+    use_optuna: bool = False,
+    optuna_trials: int = 30,
+) -> tuple:
+    """
+    Ensemble model (LGB + XGB + CatBoost) training.
+
+    Returns:
+        (trained_ensemble, metrics)
+    """
+    from models.ensemble_model import EnsembleModel
+
+    df = df.dropna(subset=["target"]).sort_values("date").reset_index(drop=True)
+    split_idx = int(len(df) * (1 - val_ratio))
+    X_train = df.iloc[:split_idx][feature_cols]
+    y_train = df.iloc[:split_idx]["target"].astype(int)
+    X_val = df.iloc[split_idx:][feature_cols]
+    y_val = df.iloc[split_idx:]["target"].astype(int)
+
+    logger.info(f"Ensemble training: {len(X_train)} train, {len(X_val)} val")
+
+    lgb_params = None
+    xgb_params = None
+
+    if use_optuna:
+        from models.tuning import optimize_lgb, optimize_xgb
+        logger.info("Running Optuna LGB optimization...")
+        lgb_params = optimize_lgb(X_train, y_train, X_val, y_val, n_trials=optuna_trials)
+        logger.info("Running Optuna XGB optimization...")
+        xgb_params = optimize_xgb(X_train, y_train, X_val, y_val, n_trials=optuna_trials)
+
+    model = EnsembleModel()
+    metrics = model.train(
+        X_train, y_train, X_val, y_val,
+        early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+        lgb_params=lgb_params,
+        xgb_params=xgb_params,
+    )
+
+    model_path = MODELS_DIR / f"{sport_code}_{model_version}"
+    model.save(model_path)
+
+    return model, metrics
+
+
+def load_model(sport_code: str, model_version: str = "v1"):
+    """保存済みモデルを読み込み (v2=Ensemble, その他=LightGBM)"""
+    # Ensembleはv2のみ（.ensemble.jsonが存在するか確認）
+    ensemble_meta = MODELS_DIR / f"{sport_code}_{model_version}.ensemble.json"
+    if ensemble_meta.exists():
+        from models.ensemble_model import EnsembleModel
+        model_path = MODELS_DIR / f"{sport_code}_{model_version}"
+        model = EnsembleModel()
+        model.load(model_path)
+        return model
+
     model_path = MODELS_DIR / f"{sport_code}_{model_version}.lgb"
     model = LightGBMModel()
     model.load(model_path)

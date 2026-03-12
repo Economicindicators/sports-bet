@@ -12,8 +12,11 @@ from database.models import (
     League,
     Team,
     Player,
+    PlayerStats,
     Match,
     HandicapData,
+    HandicapSnapshot,
+    BookmakerOdds,
     Prediction,
     get_session,
 )
@@ -219,6 +222,7 @@ class Repository:
         handicap_value: float,
         result_type: Optional[str] = None,
         payout_rate: Optional[float] = None,
+        handicap_display: Optional[str] = None,
     ) -> HandicapData:
         hd = (
             self.session.query(HandicapData).filter_by(match_id=match_id).first()
@@ -228,11 +232,14 @@ class Repository:
             hd.handicap_value = handicap_value
             hd.result_type = result_type if result_type else hd.result_type
             hd.payout_rate = payout_rate if payout_rate else hd.payout_rate
+            if handicap_display:
+                hd.handicap_display = handicap_display
         else:
             hd = HandicapData(
                 match_id=match_id,
                 handicap_team_id=handicap_team_id,
                 handicap_value=handicap_value,
+                handicap_display=handicap_display,
                 result_type=result_type,
                 payout_rate=payout_rate,
             )
@@ -276,6 +283,166 @@ class Repository:
             self.session.add(pred)
         self.session.flush()
         return pred
+
+    # ========== PlayerStats ==========
+
+    def upsert_player_stat(
+        self,
+        player_id: int,
+        season: str,
+        stat_type: str,
+        value: float,
+        sample_size: int,
+    ) -> PlayerStats:
+        from datetime import datetime
+
+        ps = (
+            self.session.query(PlayerStats)
+            .filter_by(player_id=player_id, season=season, stat_type=stat_type)
+            .first()
+        )
+        if ps:
+            ps.value = value
+            ps.sample_size = sample_size
+            ps.updated_at = datetime.utcnow()
+        else:
+            ps = PlayerStats(
+                player_id=player_id,
+                season=season,
+                stat_type=stat_type,
+                value=value,
+                sample_size=sample_size,
+            )
+            self.session.add(ps)
+        self.session.flush()
+        return ps
+
+    def get_player_stats(
+        self, player_id: int, season: Optional[str] = None
+    ) -> list[PlayerStats]:
+        q = self.session.query(PlayerStats).filter_by(player_id=player_id)
+        if season:
+            q = q.filter_by(season=season)
+        return q.all()
+
+    def get_team_players_with_stats(
+        self, team_id: int, season: Optional[str] = None
+    ) -> list[dict]:
+        """チームの選手一覧 + 統計"""
+        players = self.session.query(Player).filter_by(team_id=team_id).all()
+        result = []
+        for p in players:
+            stats = self.get_player_stats(p.player_id, season)
+            result.append({
+                "player_id": p.player_id,
+                "name": p.name,
+                "position": p.position,
+                "stats": {s.stat_type: {"value": s.value, "sample_size": s.sample_size} for s in stats},
+            })
+        return result
+
+    # ========== HandicapSnapshot ==========
+
+    def upsert_snapshot(
+        self,
+        match_id: int,
+        handicap_team_id: int,
+        handicap_value: float,
+        snapshot_type: str,
+        handicap_display: Optional[str] = None,
+    ) -> HandicapSnapshot:
+        from datetime import datetime
+
+        snap = (
+            self.session.query(HandicapSnapshot)
+            .filter_by(match_id=match_id, snapshot_type=snapshot_type)
+            .first()
+        )
+        if snap:
+            snap.handicap_team_id = handicap_team_id
+            snap.handicap_value = handicap_value
+            snap.handicap_display = handicap_display
+            snap.captured_at = datetime.utcnow()
+        else:
+            snap = HandicapSnapshot(
+                match_id=match_id,
+                handicap_team_id=handicap_team_id,
+                handicap_value=handicap_value,
+                handicap_display=handicap_display,
+                snapshot_type=snapshot_type,
+            )
+            self.session.add(snap)
+        self.session.flush()
+        return snap
+
+    def get_snapshots(self, match_id: int) -> list[HandicapSnapshot]:
+        return (
+            self.session.query(HandicapSnapshot)
+            .filter_by(match_id=match_id)
+            .order_by(HandicapSnapshot.captured_at)
+            .all()
+        )
+
+    # ========== BookmakerOdds ==========
+
+    def upsert_bookmaker_odds(
+        self,
+        match_id: int,
+        bookmaker: str,
+        source: str = "oddsportal",
+        home_odds: float = None,
+        away_odds: float = None,
+        draw_odds: float = None,
+        home_spread: float = None,
+        home_spread_odds: float = None,
+        away_spread_odds: float = None,
+        over_under: float = None,
+        over_odds: float = None,
+        under_odds: float = None,
+    ) -> BookmakerOdds:
+        from datetime import datetime
+
+        bo = (
+            self.session.query(BookmakerOdds)
+            .filter_by(match_id=match_id, bookmaker=bookmaker, source=source)
+            .first()
+        )
+        if bo:
+            if home_odds is not None: bo.home_odds = home_odds
+            if away_odds is not None: bo.away_odds = away_odds
+            if draw_odds is not None: bo.draw_odds = draw_odds
+            if home_spread is not None: bo.home_spread = home_spread
+            if home_spread_odds is not None: bo.home_spread_odds = home_spread_odds
+            if away_spread_odds is not None: bo.away_spread_odds = away_spread_odds
+            if over_under is not None: bo.over_under = over_under
+            if over_odds is not None: bo.over_odds = over_odds
+            if under_odds is not None: bo.under_odds = under_odds
+            bo.captured_at = datetime.utcnow()
+        else:
+            bo = BookmakerOdds(
+                match_id=match_id,
+                bookmaker=bookmaker,
+                source=source,
+                home_odds=home_odds,
+                away_odds=away_odds,
+                draw_odds=draw_odds,
+                home_spread=home_spread,
+                home_spread_odds=home_spread_odds,
+                away_spread_odds=away_spread_odds,
+                over_under=over_under,
+                over_odds=over_odds,
+                under_odds=under_odds,
+            )
+            self.session.add(bo)
+        self.session.flush()
+        return bo
+
+    def get_bookmaker_odds(self, match_id: int) -> list[BookmakerOdds]:
+        return (
+            self.session.query(BookmakerOdds)
+            .filter_by(match_id=match_id)
+            .all()
+        )
 
     # ========== マスタデータ初期化 ==========
 

@@ -42,11 +42,11 @@ USER_AGENTS = [
 SOURCES = {
     "handenomori": {
         "base_url": "https://handenomori.com",
-        "sports": ["npb", "mlb"],
+        "sports": ["npb", "mlb", "wbc"],
     },
     "football_hande": {
         "base_url": "https://footbool-hande.com",
-        "sports": ["jleague", "premier", "laliga", "seriea", "bundesliga"],
+        "sports": ["jleague", "premier", "laliga", "seriea", "bundesliga", "ligue1", "eredivisie", "cl"],
     },
     "b_handicap": {
         "base_url": "https://b-handicap.com",
@@ -72,6 +72,23 @@ LGBM_DEFAULT_PARAMS = {
     "bagging_freq": 5,
 }
 
+# 野球専用パラメータ (Optuna最適化済み)
+LGBM_BASEBALL_PARAMS = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "num_leaves": 30,
+    "max_depth": 3,
+    "learning_rate": 0.011,
+    "n_estimators": 3000,
+    "min_child_samples": 23,
+    "subsample": 0.64,
+    "colsample_bytree": 0.76,
+    "reg_alpha": 0.067,
+    "reg_lambda": 0.40,
+    "verbosity": -1,
+    "bagging_freq": 5,
+}
+
 CV_FOLDS = 5
 CV_GAP_DAYS = 30  # 時系列CVのギャップ
 EARLY_STOPPING_ROUNDS = 50
@@ -82,3 +99,40 @@ KELLY_FRACTION = 0.25  # 1/4 Kelly
 MAX_BET_FRACTION = 0.20  # 最大ベット比率
 MIN_EV_THRESHOLD = 0.08  # 最低EV (バックテスト最適化済み)
 STOP_LOSS_FRACTION = 0.30  # ストップロス
+
+# ========== 逆張り (Contrarian) ==========
+
+CONTRARIAN_MIN_EV_THRESHOLD = 0.10  # 逆張りの最低EV（通常EVが基準未満のとき逆側を検討）
+
+# ========== リーグ / モデル設定 ==========
+
+# 全リーグリスト (scrape対象)
+ALL_LEAGUES = [
+    "npb", "mlb", "wbc",
+    "jleague", "premier", "laliga", "seriea", "bundesliga", "ligue1", "eredivisie", "cl",
+    "nba", "bleague",
+]
+
+# リーグ → スポーツ マッピング
+LEAGUE_TO_SPORT = {
+    "npb": "baseball", "mlb": "baseball", "wbc": "baseball",
+    "jleague": "soccer", "premier": "soccer",
+    "laliga": "soccer", "seriea": "soccer",
+    "bundesliga": "soccer", "ligue1": "soccer",
+    "eredivisie": "soccer", "cl": "soccer",
+    "nba": "basketball", "bleague": "basketball",
+}
+
+# スポーツ → リーグ マッピング
+SPORT_TO_LEAGUES = {
+    "baseball": [lg for lg, sp in LEAGUE_TO_SPORT.items() if sp == "baseball"],
+    "soccer": [lg for lg, sp in LEAGUE_TO_SPORT.items() if sp == "soccer"],
+    "basketball": [lg for lg, sp in LEAGUE_TO_SPORT.items() if sp == "basketball"],
+}
+
+# スポーツ → モデルバージョン
+SPORT_MODEL_VERSION = {
+    "baseball": "v4",
+    "soccer": "v1",
+    "basketball": "v1",
+}

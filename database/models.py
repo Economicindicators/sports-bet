@@ -77,9 +77,30 @@ class Player(Base):
     position = Column(String, nullable=True)  # pitcher, fielder, forward, guard, etc.
 
     team = relationship("Team")
+    stats = relationship("PlayerStats", back_populates="player")
 
     __table_args__ = (
         UniqueConstraint("name", "league_code", name="uq_player_name_league"),
+    )
+
+
+class PlayerStats(Base):
+    """選手統計 (試合データから算出)"""
+
+    __tablename__ = "player_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    season = Column(String, nullable=False)  # e.g. "2025", "2025-26"
+    stat_type = Column(String, nullable=False)  # win_rate, era, starts, recent_form
+    value = Column(Float, nullable=False)
+    sample_size = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    player = relationship("Player", back_populates="stats")
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", "stat_type", name="uq_player_stat"),
     )
 
 
@@ -109,6 +130,7 @@ class Match(Base):
     away_pitcher = relationship("Player", foreign_keys=[away_pitcher_id])
     handicap = relationship("HandicapData", back_populates="match", uselist=False)
     prediction = relationship("Prediction", back_populates="match", uselist=False)
+    bookmaker_odds = relationship("BookmakerOdds", back_populates="match")
 
     __table_args__ = (
         UniqueConstraint(
@@ -134,11 +156,60 @@ class HandicapData(Base):
         Integer, ForeignKey("teams.team_id"), nullable=False
     )
     handicap_value = Column(Float, nullable=False)
+    handicap_display = Column(String, nullable=True)  # 原文表記 (例: "0半5", "0/3")
     result_type = Column(String, nullable=True)
     payout_rate = Column(Float, nullable=True)
 
     match = relationship("Match", back_populates="handicap")
     handicap_team = relationship("Team", foreign_keys=[handicap_team_id])
+
+
+class HandicapSnapshot(Base):
+    """ハンデ値スナップショット (ライン移動追跡用)"""
+
+    __tablename__ = "handicap_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.match_id"), nullable=False)
+    handicap_team_id = Column(Integer, ForeignKey("teams.team_id"), nullable=False)
+    handicap_value = Column(Float, nullable=False)
+    handicap_display = Column(String, nullable=True)
+    snapshot_type = Column(String, nullable=False)  # opening, midday, closing
+    captured_at = Column(DateTime, default=datetime.utcnow)
+
+    match = relationship("Match")
+    handicap_team = relationship("Team", foreign_keys=[handicap_team_id])
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "snapshot_type", name="uq_snapshot"),
+    )
+
+
+class BookmakerOdds(Base):
+    """ブックメーカーオッズ (試合×ブックメーカー)"""
+
+    __tablename__ = "bookmaker_odds"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.match_id"), nullable=False)
+    bookmaker = Column(String, nullable=False)  # pinnacle, bet365, etc.
+    home_odds = Column(Float, nullable=True)  # h2h home
+    away_odds = Column(Float, nullable=True)  # h2h away
+    draw_odds = Column(Float, nullable=True)  # h2h draw (soccer)
+    home_spread = Column(Float, nullable=True)  # spread value
+    home_spread_odds = Column(Float, nullable=True)
+    away_spread_odds = Column(Float, nullable=True)
+    over_under = Column(Float, nullable=True)  # total line
+    over_odds = Column(Float, nullable=True)
+    under_odds = Column(Float, nullable=True)
+    source = Column(String, nullable=False, default="oddsportal")  # oddsportal, odds_api
+    captured_at = Column(DateTime, default=datetime.utcnow)
+
+    match = relationship("Match", back_populates="bookmaker_odds")
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "bookmaker", "source", name="uq_bm_odds"),
+    )
 
 
 class Prediction(Base):

@@ -52,21 +52,31 @@ def parse_hande_result(text: str) -> Optional[tuple[float, str]]:
 
     text = text.strip()
 
-    # パターン1: 数字 + (半|/|.) + 数字
-    match = re.match(r"(\d+)(半|/|\.)(\d+)", text)
+    # パターン1a: 数字 + 半 + 数字 (例: "0半3", "9半5")
+    match = re.match(r"(\d+)半(\d+)", text)
     if match:
         base = int(match.group(1))
-        separator = match.group(2)
-        result_code = match.group(3)
+        result_code = match.group(2)
+        return base + 0.5, result_code
 
-        if separator == "半":
-            handicap_value = base + 0.5
-        else:  # "/" or "."
-            handicap_value = float(base)
+    # パターン1b: 数字 + / + 数字 (例: "0/3", "1/5") → 整数ハンデ + ボーダー
+    match = re.match(r"(\d+)/(\d+)", text)
+    if match:
+        base = int(match.group(1))
+        result_code = match.group(2)
+        return float(base), result_code
 
-        return handicap_value, result_code
+    # パターン1c: 小数 (例: "5.5", "3.5") → そのまま数値化
+    match = re.match(r"^(\d+\.\d+)$", text)
+    if match:
+        return float(match.group(1)), ""
 
-    # パターン2: 単独数字 ("0", "1", "2" 等)
+    # パターン2: 数字 + 半 (末尾数字なし: "0半" → 0.5, "1半" → 1.5)
+    match = re.match(r"^(\d+)半$", text)
+    if match:
+        return float(match.group(1)) + 0.5, ""
+
+    # パターン3: 単独数字 ("0", "1", "2" 等)
     match = re.match(r"^(\d+)$", text)
     if match:
         return float(match.group(1)), ""
@@ -156,9 +166,11 @@ class FootballHandeScraper(BaseScraper):
 
         parsed = parse_hande_result(hande_text)
         if not parsed:
-            return None
-
-        handicap_value, result_code = parsed
+            # ハンデ未発表でも試合情報は取得を続行
+            handicap_value = 0.0
+            result_code = None
+        else:
+            handicap_value, result_code = parsed
 
         # Row 2: チーム名・スコア
         team_cells = rows[2].find_all("td")
@@ -183,8 +195,10 @@ class FootballHandeScraper(BaseScraper):
         home_score = self._extract_score(home_score_div)
         away_score = self._extract_score(away_score_div)
 
-        # ハンデを背負うチーム = テキストがある側
-        if handicap_on_home:
+        # ハンデを背負うチーム = テキストがある側（未発表時はホームをデフォルト）
+        if not parsed:
+            handicap_team = home_team
+        elif handicap_on_home:
             handicap_team = home_team
         else:
             handicap_team = away_team
@@ -200,6 +214,7 @@ class FootballHandeScraper(BaseScraper):
             handicap_team=handicap_team,
             handicap_value=handicap_value,
             league_code=league_code,
+            handicap_display=hande_text,
         )
 
     def _extract_team_name(self, div: Tag) -> str:

@@ -13,31 +13,23 @@ from scraper.handenomori import GameData, HandenomoriScraper
 from scraper.football_hande import FootballHandeScraper
 from scraper.b_handicap import BHandicapScraper
 from scraper.date_utils import date_range
+from config.constants import LEAGUE_TO_SPORT
 
 logger = logging.getLogger(__name__)
-
-# リーグ → スポーツコード
-LEAGUE_TO_SPORT = {
-    "npb": "baseball",
-    "mlb": "baseball",
-    "jleague": "soccer",
-    "premier": "soccer",
-    "laliga": "soccer",
-    "seriea": "soccer",
-    "bundesliga": "soccer",
-    "nba": "basketball",
-    "bleague": "basketball",
-}
 
 # リーグ → スクレイパークラス
 LEAGUE_TO_SCRAPER = {
     "npb": HandenomoriScraper,
     "mlb": HandenomoriScraper,
+    "wbc": HandenomoriScraper,
     "jleague": FootballHandeScraper,
     "premier": FootballHandeScraper,
     "laliga": FootballHandeScraper,
     "seriea": FootballHandeScraper,
     "bundesliga": FootballHandeScraper,
+    "ligue1": FootballHandeScraper,
+    "eredivisie": FootballHandeScraper,
+    "cl": FootballHandeScraper,
     "nba": BHandicapScraper,
     "bleague": BHandicapScraper,
 }
@@ -118,6 +110,16 @@ class ScrapeManager:
         # ステータス判定
         status = "finished" if game.home_score is not None else "scheduled"
 
+        # 試合時刻をtime型に変換
+        match_time = None
+        if game.time:
+            try:
+                from datetime import time as dt_time
+                parts = game.time.split(":")
+                match_time = dt_time(int(parts[0]), int(parts[1]))
+            except (ValueError, IndexError):
+                pass
+
         # 試合をupsert
         match = repo.upsert_match(
             sport_code=sport_code,
@@ -127,6 +129,7 @@ class ScrapeManager:
             away_team_id=away_team.team_id,
             home_score=game.home_score,
             away_score=game.away_score,
+            match_time=match_time,
             venue=game.venue,
             status=status,
             home_pitcher_id=home_pitcher_id,
@@ -161,6 +164,7 @@ class ScrapeManager:
             handicap_value=game.handicap_value,
             result_type=result_type,
             payout_rate=payout_rate,
+            handicap_display=getattr(game, 'handicap_display', None),
         )
 
         return 1
