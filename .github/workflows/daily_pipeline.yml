@@ -43,20 +43,16 @@ jobs:
           restore-keys: |
             sports-bet-db-
 
-      # Turso CLI インストール & 認証
+      # Turso CLI インストール
       - name: Setup Turso CLI
         run: |
           curl -sSfL https://get.tur.so/install.sh | bash
           echo "$HOME/.turso" >> $GITHUB_PATH
-        env:
-          TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
 
-      - name: Authenticate Turso
-        run: turso auth login --auth-token "$TURSO_API_TOKEN"
-        env:
-          TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
+      - name: Verify Turso CLI
+        run: turso --version
 
-      # パイプライン実行
+      # パイプライン実行 (TURSO_API_TOKEN 環境変数でCLI認証)
       - name: Run pipeline
         run: |
           ARGS="--days-back 7"
