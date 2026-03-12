@@ -2,9 +2,14 @@ name: Daily Prediction Pipeline
 
 on:
   schedule:
-    # JST 08:00 = UTC 23:00 (前日), JST 20:00 = UTC 11:00
-    - cron: "0 23 * * *"
-    - cron: "0 11 * * *"
+    # 4時間ごと (6回/日) — 試合開始2-3時間前に最新ハンデで予測更新
+    # JST 02:00 = UTC 17:00 (欧州サッカー/MLB結果確定)
+    # JST 06:00 = UTC 21:00 (NBA夜の部)
+    # JST 10:00 = UTC 01:00 (NBA昼/Bリーグ)
+    # JST 14:00 = UTC 05:00 (NPB昼の試合)
+    # JST 18:00 = UTC 09:00 (NPB夜/MLBデーゲーム)
+    # JST 22:00 = UTC 13:00 (欧州サッカー/MLB夜)
+    - cron: "0 17,21,1,5,9,13 * * *"
   workflow_dispatch:
     inputs:
       sport:
