@@ -11,7 +11,7 @@ from urllib.parse import urlparse, parse_qs
 
 from features.feature_pipeline import load_matches_df, build_features
 from models.training import load_model
-from betting.handicap_ev import calculate_handicap_ev, calculate_contrarian_ev
+from betting.handicap_ev import calculate_handicap_ev, calculate_contrarian_ev, home_prob_to_handicap_prob
 from betting.kelly import kelly_fraction
 from config.constants import (
     CONTRARIAN_MIN_EV_THRESHOLD,
@@ -437,7 +437,17 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
         return []
 
     df, feature_cols = build_features(df, sport)
-    df["pred_prob"] = model.predict_proba(df[feature_cols])
+    # モデルはホーム勝率を予測 → ハンデ値で補正してfavorable確率に変換
+    df["home_win_prob"] = model.predict_proba(df[feature_cols])
+    df["handicap_team_is_home"] = (df["handicap_team_id"] == df["home_team_id"]).astype(int)
+    df["pred_prob"] = df.apply(
+        lambda r: home_prob_to_handicap_prob(
+            r["home_win_prob"],
+            bool(r["handicap_team_is_home"]),
+            r.get("handicap_value", 0),
+            sport=sport,
+        ), axis=1
+    )
     df["handicap_ev"] = df["pred_prob"].apply(calculate_handicap_ev)
     df["kelly_frac"] = df["pred_prob"].apply(lambda p: kelly_fraction(p))
 

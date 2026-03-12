@@ -115,10 +115,12 @@ def build_features(
     if sport_code is None:
         sport_code = df["sport_code"].iloc[0]
 
-    # ターゲット: ハンデ有利チームが5分勝ち以上 (payout >= 1.5)
-    # scheduled試合はpayout_rateがNone → targetもNaN
-    df["target"] = pd.to_numeric(df["payout_rate"], errors="coerce")
-    df["target"] = (df["target"] >= FAVORABLE_PAYOUT_THRESHOLD).where(df["payout_rate"].notna()).astype(float)
+    # ターゲット: ホームチームが勝つか (シンプル勝敗予測)
+    # scheduled試合はスコアがNone → targetもNaN
+    # EV計算時にハンデを後から考慮する
+    home_score = pd.to_numeric(df["home_score"], errors="coerce")
+    away_score = pd.to_numeric(df["away_score"], errors="coerce")
+    df["target"] = (home_score > away_score).where(home_score.notna() & away_score.notna()).astype(float)
 
     # ハンデチームがホームかどうか
     df["handicap_team_is_home"] = (
