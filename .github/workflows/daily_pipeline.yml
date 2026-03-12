@@ -52,7 +52,7 @@ jobs:
           TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
 
       - name: Authenticate Turso
-        run: turso auth token
+        run: turso auth login --auth-token "$TURSO_API_TOKEN"
         env:
           TURSO_API_TOKEN: ${{ secrets.TURSO_API_TOKEN }}
 
