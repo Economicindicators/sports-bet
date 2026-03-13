@@ -72,19 +72,53 @@ LGBM_DEFAULT_PARAMS = {
     "bagging_freq": 5,
 }
 
-# 野球専用パラメータ (Optuna最適化済み)
+# 野球専用パラメータ (Optuna最適化済み — ホーム勝敗ターゲット)
 LGBM_BASEBALL_PARAMS = {
     "objective": "binary",
     "metric": "binary_logloss",
-    "num_leaves": 30,
+    "num_leaves": 50,
     "max_depth": 3,
-    "learning_rate": 0.011,
+    "learning_rate": 0.018,
     "n_estimators": 3000,
-    "min_child_samples": 23,
-    "subsample": 0.64,
-    "colsample_bytree": 0.76,
-    "reg_alpha": 0.067,
-    "reg_lambda": 0.40,
+    "min_child_samples": 38,
+    "subsample": 0.61,
+    "colsample_bytree": 0.78,
+    "reg_alpha": 0.030,
+    "reg_lambda": 1.69,
+    "verbosity": -1,
+    "bagging_freq": 1,
+}
+
+# サッカー専用パラメータ (Optuna最適化済み)
+LGBM_SOCCER_PARAMS = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "num_leaves": 39,
+    "max_depth": 4,
+    "learning_rate": 0.086,
+    "n_estimators": 3000,
+    "min_child_samples": 15,
+    "subsample": 0.78,
+    "colsample_bytree": 0.60,
+    "reg_alpha": 0.012,
+    "reg_lambda": 0.010,
+    "verbosity": -1,
+    "bagging_freq": 7,
+}
+
+# バスケ専用パラメータ (Optuna最適化済み)
+LGBM_BASKETBALL_PARAMS = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "num_leaves": 40,
+    "max_depth": 4,
+    "learning_rate": 0.079,
+    "n_estimators": 3000,
+    "min_child_samples": 28,
+    "subsample": 0.83,
+    "colsample_bytree": 0.70,
+    "reg_alpha": 1.36,
+    "reg_lambda": 0.028,
     "verbosity": -1,
     "bagging_freq": 5,
 }
@@ -99,6 +133,14 @@ KELLY_FRACTION = 0.25  # 1/4 Kelly
 MAX_BET_FRACTION = 0.20  # 最大ベット比率
 MIN_EV_THRESHOLD = 0.08  # 最低EV (バックテスト最適化済み)
 STOP_LOSS_FRACTION = 0.30  # ストップロス
+
+# リーグ別EV閾値 (バックテスト最適化済み)
+# 未指定リーグは MIN_EV_THRESHOLD を使用
+LEAGUE_EV_THRESHOLD = {
+    "npb": 0.05,     # NPB: EV>=0.05でROI +0.8%
+    "mlb": 0.12,     # MLB: 閾値高めで損失抑制
+    "wbc": 0.05,     # WBC: NPBと同等
+}
 
 # ========== 逆張り (Contrarian) ==========
 

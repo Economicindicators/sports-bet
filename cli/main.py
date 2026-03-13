@@ -152,7 +152,7 @@ def cv(
         console.print("[red]データがありません[/red]")
         return
 
-    results = time_series_cv(df, feature_cols, n_splits=folds)
+    results = time_series_cv(df, feature_cols, n_splits=folds, sport_code=sport)
 
     table = Table(title="CV結果")
     table.add_column("Fold", style="cyan")
@@ -197,6 +197,7 @@ def backtest(
         n_periods=periods,
         ev_threshold=ev_threshold,
         bet_size=bet_size,
+        sport_code=sport,
     )
 
     # 期間別結果

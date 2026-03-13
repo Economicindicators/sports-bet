@@ -2,17 +2,17 @@
   "params": {
     "objective": "binary",
     "metric": "binary_logloss",
-    "num_leaves": 30,
+    "num_leaves": 50,
     "max_depth": 3,
-    "learning_rate": 0.011,
+    "learning_rate": 0.018,
     "n_estimators": 3000,
-    "min_child_samples": 23,
-    "subsample": 0.64,
-    "colsample_bytree": 0.76,
-    "reg_alpha": 0.067,
-    "reg_lambda": 0.4,
+    "min_child_samples": 38,
+    "subsample": 0.61,
+    "colsample_bytree": 0.78,
+    "reg_alpha": 0.03,
+    "reg_lambda": 1.69,
     "verbosity": -1,
-    "bagging_freq": 5
+    "bagging_freq": 1
   },
   "feature_names": [
     "is_home_favorite",

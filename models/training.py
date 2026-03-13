@@ -10,13 +10,18 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from config.constants import CV_FOLDS, CV_GAP_DAYS, EARLY_STOPPING_ROUNDS, LGBM_BASEBALL_PARAMS
+from config.constants import (
+    CV_FOLDS, CV_GAP_DAYS, EARLY_STOPPING_ROUNDS,
+    LGBM_BASEBALL_PARAMS, LGBM_SOCCER_PARAMS, LGBM_BASKETBALL_PARAMS,
+)
 from config.settings import MODELS_DIR
 from models.lgbm_model import LightGBMModel
 
 # スポーツ別LightGBMパラメータ
 SPORT_LGBM_PARAMS = {
     "baseball": LGBM_BASEBALL_PARAMS,
+    "soccer": LGBM_SOCCER_PARAMS,
+    "basketball": LGBM_BASKETBALL_PARAMS,
 }
 
 logger = logging.getLogger(__name__)
@@ -27,6 +32,7 @@ def time_series_cv(
     feature_cols: list[str],
     n_splits: int = CV_FOLDS,
     gap_days: int = CV_GAP_DAYS,
+    sport_code: str = None,
 ) -> list[dict]:
     """
     時系列CV (expanding window + gap)。
@@ -82,7 +88,7 @@ def time_series_cv(
             f"val={len(X_val)} ({gap_date}～{val_end_date})"
         )
 
-        sport_params = SPORT_LGBM_PARAMS.get(None)  # CV uses default
+        sport_params = SPORT_LGBM_PARAMS.get(sport_code)
         model = LightGBMModel(params=sport_params)
         metrics = model.train(
             X_train, y_train, X_val, y_val,

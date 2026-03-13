@@ -15,7 +15,9 @@ from betting.handicap_ev import calculate_handicap_ev, calculate_contrarian_ev, 
 from betting.kelly import kelly_fraction
 from config.constants import (
     CONTRARIAN_MIN_EV_THRESHOLD,
+    LEAGUE_EV_THRESHOLD,
     LEAGUE_TO_SPORT,
+    MIN_EV_THRESHOLD,
     SPORT_TO_LEAGUES,
     SPORT_MODEL_VERSION,
 )
@@ -484,11 +486,15 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
         prob = float(row["pred_prob"])
         ev = float(row["handicap_ev"])
 
+        league_code = match.league_code if match else ""
+        league_ev_thresh = LEAGUE_EV_THRESHOLD.get(league_code, MIN_EV_THRESHOLD)
+        is_recommended = 1 if ev >= league_ev_thresh else 0
+
         pred = {
             "match_id": mid,
             "model_version": f"{sport}_{version}",
             "sport": sport,
-            "league": match.league_code if match else "",
+            "league": league_code,
             "date": match_date,
             "home_team": home.name if home else "",
             "away_team": away.name if away else "",
@@ -501,6 +507,8 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
             "payout_rate": payout,
             "status": status,
             "game_time": game_time,
+            "ev_threshold": league_ev_thresh,
+            "is_recommended": is_recommended,
             "contrarian_team": "",
             "contrarian_ev": 0,
             "contrarian_kelly": 0,
@@ -557,9 +565,11 @@ def save_to_turso(predictions: list[dict]) -> int:
         "  result_type TEXT,"
         "  payout_rate REAL,"
         "  status TEXT DEFAULT 'pending',"
+        "  ev_threshold REAL DEFAULT 0.08,"
+        "  is_recommended INTEGER DEFAULT 0,"
         "  created_at TEXT DEFAULT (datetime('now')),"
         "  UNIQUE(match_id, model_version)"
-        ");"
+        ");",
     ]
 
     for p in predictions:
@@ -570,11 +580,13 @@ def save_to_turso(predictions: list[dict]) -> int:
             f"(match_id, model_version, sport, league, date, home_team, away_team, "
             f"handicap_team, handicap_value, pred_prob, handicap_ev, kelly_fraction, "
             f"result_type, payout_rate, status, game_time, "
+            f"ev_threshold, is_recommended, "
             f"contrarian_team, contrarian_ev, contrarian_kelly, insights, commentary, sns_text) VALUES "
             f"({p['match_id']}, '{esc(p['model_version'])}', '{esc(p['sport'])}', '{esc(p.get('league',''))}', '{esc(p['date'])}', "
             f"'{esc(p['home_team'])}', '{esc(p['away_team'])}', '{esc(p['handicap_team'])}', {p['handicap_value']}, "
             f"{p['pred_prob']}, {p['handicap_ev']}, {p['kelly_fraction']}, "
             f"'{esc(p['result_type'])}', {p['payout_rate']}, '{esc(p['status'])}', '{esc(game_time)}', "
+            f"{p.get('ev_threshold', 0.08)}, {p.get('is_recommended', 0)}, "
             f"'{esc(p.get('contrarian_team',''))}', {p.get('contrarian_ev', 0)}, {p.get('contrarian_kelly', 0)}, "
             f"'{esc(json.dumps(p.get('insights', {}), ensure_ascii=False))}', "
             f"'{esc(p.get('commentary', ''))}', "
@@ -584,6 +596,18 @@ def save_to_turso(predictions: list[dict]) -> int:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as f:
         f.write("\n".join(lines))
         sql_path = f.name
+
+    # First, try adding new columns (ignore errors if they already exist)
+    migrate_sql = (
+        "ALTER TABLE predictions ADD COLUMN ev_threshold REAL DEFAULT 0.08;\n"
+        "ALTER TABLE predictions ADD COLUMN is_recommended INTEGER DEFAULT 0;\n"
+    )
+    migrate_result = subprocess.run(
+        [TURSO_BIN, "db", "shell", TURSO_DB],
+        input=migrate_sql,
+        capture_output=True, text=True, timeout=30,
+    )
+    # Ignore migration errors (columns may already exist)
 
     result = subprocess.run(
         [TURSO_BIN, "db", "shell", TURSO_DB],

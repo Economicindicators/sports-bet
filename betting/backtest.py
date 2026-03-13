@@ -11,9 +11,10 @@ import numpy as np
 import pandas as pd
 
 from config.constants import KELLY_FRACTION, MIN_EV_THRESHOLD
-from betting.handicap_ev import calculate_handicap_ev, AVG_FAVORABLE_PAYOUT
+from betting.handicap_ev import calculate_handicap_ev, home_prob_to_handicap_prob, AVG_FAVORABLE_PAYOUT
 from betting.kelly import kelly_fraction
 from models.lgbm_model import LightGBMModel
+from models.training import SPORT_LGBM_PARAMS
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def walk_forward_backtest(
     retrain_gap_days: int = 30,
     ev_threshold: float = MIN_EV_THRESHOLD,
     bet_size: float = 1000,
+    sport_code: str = None,
 ) -> BacktestResult:
     """
     Walk-forward バックテスト。
@@ -56,7 +58,8 @@ def walk_forward_backtest(
     Returns:
         BacktestResult
     """
-    df = df.sort_values("date").reset_index(drop=True)
+    # NaN target (scheduled試合) を除外
+    df = df.dropna(subset=["target"]).sort_values("date").reset_index(drop=True)
     dates = df["date"].unique()
     n_dates = len(dates)
 
@@ -95,8 +98,9 @@ def walk_forward_backtest(
         if len(X_train) < 50 or len(X_test) < 5:
             continue
 
-        # 学習
-        model = LightGBMModel()
+        # 学習 (スポーツ別Optunaパラメータ使用)
+        sport_params = SPORT_LGBM_PARAMS.get(sport_code)
+        model = LightGBMModel(params=sport_params)
         # train/valを8:2で分離
         split = int(len(X_train) * 0.8)
         model.train(
@@ -104,10 +108,23 @@ def walk_forward_backtest(
             X_train.iloc[split:], y_train.iloc[split:],
         )
 
-        # 予測
+        # 予測: ホーム勝率 → ハンデ補正 → EV
         probs = model.predict_proba(X_test)
         test_df = df.loc[test_mask].copy()
-        test_df["pred_prob"] = probs
+        test_df["home_win_prob"] = probs
+
+        sport_code = test_df["sport_code"].iloc[0] if "sport_code" in test_df.columns else "baseball"
+        test_df["handicap_team_is_home"] = (
+            test_df["handicap_team_id"] == test_df["home_team_id"]
+        ).astype(int)
+        test_df["pred_prob"] = test_df.apply(
+            lambda r: home_prob_to_handicap_prob(
+                r["home_win_prob"],
+                bool(r["handicap_team_is_home"]),
+                r.get("handicap_value", 0),
+                sport=sport_code,
+            ), axis=1
+        )
         test_df["handicap_ev"] = test_df["pred_prob"].apply(calculate_handicap_ev)
 
         # フィルタ
