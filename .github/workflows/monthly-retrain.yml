@@ -1,0 +1,80 @@
+name: Monthly Model Retrain
+
+on:
+  schedule:
+    # 毎月1日 JST 5:00 = UTC 20:00
+    - cron: '0 20 1 * *'
+  workflow_dispatch:
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install lightgbm xgboost catboost scikit-learn sqlalchemy requests pandas numpy anthropic
+
+      - name: Download DB
+        uses: actions/download-artifact@v4
+        with:
+          name: sports-bet-db
+          path: data/
+        continue-on-error: true
+
+      - name: Retrain all models
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from features.feature_pipeline import build_features
+          from models.training import train_ensemble, load_model
+          from prediction_server import load_matches_df
+          from pathlib import Path
+
+          for sport, version in [('baseball', 'v5'), ('basketball', 'v4'), ('soccer', 'v3')]:
+              print(f'=== Retraining {sport} {version} ===')
+              try:
+                  df = load_matches_df(sport_code=sport, include_scheduled=False)
+                  if sport == 'basketball':
+                      df = df[df['handicap_value'] > 0].copy()
+                  if len(df) < 1000:
+                      print(f'  Skipping {sport}: only {len(df)} matches')
+                      continue
+                  df, fc = build_features(df, sport)
+                  model, metrics = train_ensemble(df, fc, sport, version, val_ratio=0.2)
+                  print(f'  {sport} {version}: AUC={metrics[\"ensemble_auc\"]:.4f}')
+              except Exception as e:
+                  print(f'  Error: {e}')
+          "
+
+      - name: Upload DB
+        uses: actions/upload-artifact@v4
+        with:
+          name: sports-bet-db
+          path: data/sports_bet.db
+          retention-days: 90
+          overwrite: true
+
+      - name: Upload models
+        uses: actions/upload-artifact@v4
+        with:
+          name: sports-bet-models
+          path: data/models/
+          retention-days: 90
+          overwrite: true
+
+      - name: Summary
+        run: |
+          echo "## Sports-bet Monthly Retrain" >> $GITHUB_STEP_SUMMARY
+          echo "Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          ls -la data/models/ >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No models dir"
