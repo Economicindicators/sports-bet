@@ -7,3 +7,11 @@ __pycache__/
 .DS_Store
 .claude/
 .vercel
+.env
+data/database.db
+data/sports_bet.db
+catboost_info/
+logs/
+__pycache__/
+*.pyc
+.venv/
