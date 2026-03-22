@@ -132,16 +132,28 @@ def run_pipeline(
         except Exception as e:
             logger.warning(f"  Settle error: {e}")
 
+    # Step 5: Line Edge Detection (ハンデ vs BMオッズ乖離検出)
+    edge_result = {"detected": 0, "saved": 0}
+    if not dry_run:
+        logger.info("=== Step 5: Line Edge Detection ===")
+        try:
+            from line_edge_detector import run_detection
+            edge_result = run_detection(min_diff=0.5)
+            logger.info(f"  Detected {edge_result['detected']} line edges")
+        except Exception as e:
+            logger.warning(f"  Edge detection error: {e}")
+
     result = {
         "sports": sports,
         "scrape": scrape_results,
         "odds_fetched": odds_count,
         "predictions": total_predictions,
         "saved": total_saved,
+        "line_edges": edge_result.get("detected", 0),
         "dry_run": dry_run,
     }
 
-    logger.info(f"=== Pipeline complete: {total_predictions} predictions, {total_saved} saved ===")
+    logger.info(f"=== Pipeline complete: {total_predictions} predictions, {total_saved} saved, {edge_result.get('detected', 0)} edges ===")
     return result
 
 

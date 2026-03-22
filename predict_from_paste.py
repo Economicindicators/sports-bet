@@ -31,7 +31,7 @@ from features.feature_pipeline import load_matches_df, build_features
 from models.training import load_model
 from betting.handicap_ev import calculate_handicap_ev, calculate_contrarian_ev
 from betting.kelly import kelly_fraction
-from config.constants import CONTRARIAN_MIN_EV_THRESHOLD
+from config.constants import CONTRARIAN_MIN_EV_THRESHOLD, SPORT_MODEL_VERSION
 from database.models import get_session, Match, Team, HandicapData
 from scraper.football_hande import parse_hande_result
 
@@ -238,7 +238,7 @@ def find_team_in_db(session, name: str, league_code: str) -> Optional[Team]:
     return None
 
 
-def predict_matches(parsed: list[ParsedMatch], target_date: date, version: str = "v2") -> list[dict]:
+def predict_matches(parsed: list[ParsedMatch], target_date: date, version: str = None) -> list[dict]:
     """パースした試合を予測"""
     session = get_session()
     results = []
@@ -250,10 +250,11 @@ def predict_matches(parsed: list[ParsedMatch], target_date: date, version: str =
         by_sport.setdefault(sport, []).append(m)
 
     for sport, sport_matches in by_sport.items():
+        ver = version or SPORT_MODEL_VERSION.get(sport, "v1")
         try:
-            model = load_model(sport, version)
+            model = load_model(sport, ver)
         except Exception as e:
-            logger.warning(f"No model for {sport}/{version}: {e}")
+            logger.warning(f"No model for {sport}/{ver}: {e}")
             continue
 
         df = load_matches_df(sport_code=sport, include_scheduled=True)
@@ -316,7 +317,7 @@ def predict_matches(parsed: list[ParsedMatch], target_date: date, version: str =
             kelly = kelly_fraction(prob)
             h_team = pm.home_team if pm.handicap_team_side == "home" else pm.away_team
 
-            results.append({
+            entry = {
                 "league": pm.league_code,
                 "home_team": pm.home_team,
                 "away_team": pm.away_team,
@@ -329,40 +330,34 @@ def predict_matches(parsed: list[ParsedMatch], target_date: date, version: str =
                 "bet_type": "normal",
                 "game_time": pm.time,
                 "error": None,
-            })
+                "contrarian_team": "",
+                "contrarian_ev": 0,
+                "contrarian_kelly": 0,
+            }
 
-            # 逆張り判定: 通常EVが基準未満（PASS）なら逆側を検討
+            # 逆張り判定: 通常EVが基準未満（PASS）なら逆側を同じレコードに追加
             if ev < CONTRARIAN_MIN_EV_THRESHOLD:
                 contrarian_ev = calculate_contrarian_ev(prob, border_pct=pm.border_pct)
                 if contrarian_ev >= CONTRARIAN_MIN_EV_THRESHOLD:
-                    # 逆側のチーム
                     contra_team = pm.away_team if pm.handicap_team_side == "home" else pm.home_team
-                    contra_prob = 1.0 - prob - 0.02  # unfavorable probability
+                    contra_prob = 1.0 - prob - 0.02
                     contra_kelly = kelly_fraction(contra_prob)
-                    results.append({
-                        "league": pm.league_code,
-                        "home_team": pm.home_team,
-                        "away_team": pm.away_team,
-                        "handicap_team": contra_team,
-                        "handicap_display": pm.handicap_display,
-                        "handicap_value": pm.handicap_value,
-                        "pred_prob": round(contra_prob, 6),
-                        "handicap_ev": round(contrarian_ev, 6),
-                        "kelly_frac": round(contra_kelly, 6),
-                        "bet_type": "contrarian",
-                        "game_time": pm.time,
-                        "error": None,
-                    })
+                    entry["contrarian_team"] = contra_team
+                    entry["contrarian_ev"] = round(contrarian_ev, 6)
+                    entry["contrarian_kelly"] = round(contra_kelly, 6)
+
+            results.append(entry)
 
     session.close()
     return results
 
 
-def save_to_turso(results: list[dict], target_date: date, version: str = "v2") -> int:
+def save_to_turso(results: list[dict], target_date: date, version: str = None) -> int:
     """予測結果をTursoに保存"""
+    # 通常EV >= 0.05 または逆張りEV >= threshold のレコードのみ保存
     valid = [r for r in results if r["pred_prob"] is not None and (
-        (r.get("bet_type") != "contrarian" and (r["handicap_ev"] or 0) >= 0.05) or
-        (r.get("bet_type") == "contrarian" and (r["handicap_ev"] or 0) >= CONTRARIAN_MIN_EV_THRESHOLD)
+        (r["handicap_ev"] or 0) >= 0.05 or
+        (r.get("contrarian_ev") or 0) >= CONTRARIAN_MIN_EV_THRESHOLD
     )]
     if not valid:
         return 0
@@ -370,23 +365,24 @@ def save_to_turso(results: list[dict], target_date: date, version: str = "v2") -
     lines = []
     for r in valid:
         sport = LEAGUE_TO_SPORT.get(r["league"], "soccer")
+        ver = version or SPORT_MODEL_VERSION.get(sport, "v1")
         esc = lambda s: str(s).replace("'", "''")
-        is_contrarian = r.get("bet_type") == "contrarian"
-        version_suffix = f"{version}_contrarian" if is_contrarian else version
-        # チーム名+日付+bet_typeから一意なmatch_idを生成（重複保存を防止）
-        key = f"{target_date}_{r['home_team']}_{r['away_team']}{'_contra' if is_contrarian else ''}"
+        # 1試合1レコード (逆張りは contrarian_* フィールドに統合)
+        key = f"{target_date}_{r['home_team']}_{r['away_team']}"
         match_id = int(hashlib.md5(key.encode()).hexdigest()[:8], 16) % 900000 + 100000
         game_time = r.get('game_time') or ''
         lines.append(
             f"INSERT OR REPLACE INTO predictions "
             f"(match_id, model_version, sport, date, home_team, away_team, "
             f"handicap_team, handicap_value, pred_prob, handicap_ev, kelly_fraction, "
-            f"result_type, payout_rate, status, league, handicap_display, game_time) VALUES "
-            f"({match_id}, '{sport}_{version_suffix}', '{sport}', "
+            f"result_type, payout_rate, status, league, handicap_display, game_time, "
+            f"contrarian_team, contrarian_ev, contrarian_kelly) VALUES "
+            f"({match_id}, '{sport}_{ver}', '{sport}', "
             f"'{target_date}', '{esc(r['home_team'])}', '{esc(r['away_team'])}', "
             f"'{esc(r['handicap_team'])}', {r['handicap_value']}, "
             f"{r['pred_prob']}, {r['handicap_ev']}, {r['kelly_frac']}, "
-            f"'', 0, 'pending', '{r['league']}', '{esc(r['handicap_display'])}', '{esc(game_time)}');"
+            f"'', 0, 'pending', '{r['league']}', '{esc(r['handicap_display'])}', '{esc(game_time)}', "
+            f"'{esc(r.get('contrarian_team',''))}', {r.get('contrarian_ev', 0)}, {r.get('contrarian_kelly', 0)});"
         )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as f:
@@ -440,20 +436,19 @@ def format_output(results: list[dict]) -> str:
 
             ev = r["handicap_ev"]
             prob = r["pred_prob"]
-            is_contrarian = r.get("bet_type") == "contrarian"
 
-            if is_contrarian:
-                mark = "▼"
-                label = "[逆張り]"
-            else:
-                mark = "◎" if ev >= 0.2 else "○" if ev >= 0.1 else "△" if ev >= 0.05 else "×"
-                label = ""
+            mark = "◎" if ev >= 0.2 else "○" if ev >= 0.1 else "△" if ev >= 0.05 else "×"
 
             lines.append(
-                f"  {mark} {label}{r['handicap_team']} <{r['handicap_display']}>"
+                f"  {mark} {r['handicap_team']} <{r['handicap_display']}>"
                 f"  {r['home_team']} vs {r['away_team']}"
                 f"  EV:{ev:+.1%}  確率:{prob:.1%}"
             )
+            if r.get("contrarian_team"):
+                lines.append(
+                    f"    🔄 逆張り: {r['contrarian_team']}"
+                    f"  EV:{r['contrarian_ev']:+.1%}"
+                )
 
     return "\n".join(lines)
 
@@ -462,7 +457,7 @@ def main():
     parser = argparse.ArgumentParser(description="ハンデ貼り付け → 予測")
     parser.add_argument("--file", "-f", help="入力ファイル（省略時はstdin）")
     parser.add_argument("--date", "-d", default=None, help="対象日 (YYYYMMDD)")
-    parser.add_argument("--version", "-v", default="v2", help="モデルバージョン")
+    parser.add_argument("--version", "-v", default=None, help="モデルバージョン (省略時は各スポーツの最新)")
     parser.add_argument("--save", "-s", action="store_true", help="Tursoに保存")
     args = parser.parse_args()
 

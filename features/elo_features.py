@@ -9,12 +9,42 @@ import numpy as np
 from collections import defaultdict
 
 
-# Elo定数
+# Elo定数 (デフォルト)
 INITIAL_RATING = 1500
 K_FACTOR = 32
 HOME_ADVANTAGE = 60  # ホームチームのEloボーナス
 MOV_MULTIPLIER = 0.5  # 得点差によるK補正係数 (Margin of Victory)
 SEASON_REGRESSION = 0.33  # シーズン間の平均回帰率
+
+# スポーツ別Eloパラメータ (Optuna最適化済み)
+SPORT_ELO_PARAMS = {
+    "baseball": {
+        "k_factor": 5.1,
+        "home_advantage": 25.6,
+        "mov_multiplier": 0.142,
+        "season_regression": 0.661,
+    },
+    "soccer": {
+        "k_factor": 13.2,
+        "home_advantage": 10.0,
+        "mov_multiplier": 0.832,
+        "season_regression": 0.115,
+    },
+    "basketball": {
+        "k_factor": 10.0,
+        "home_advantage": 38.3,
+        "mov_multiplier": 0.690,
+        "season_regression": 0.493,
+    },
+}
+
+
+def _get_elo_params(sport_code=None) -> tuple:
+    """スポーツ別Eloパラメータを返す"""
+    if sport_code and sport_code in SPORT_ELO_PARAMS:
+        p = SPORT_ELO_PARAMS[sport_code]
+        return p["k_factor"], p["home_advantage"], p["mov_multiplier"], p["season_regression"]
+    return K_FACTOR, HOME_ADVANTAGE, MOV_MULTIPLIER, SEASON_REGRESSION
 
 
 def _expected_score(rating_a: float, rating_b: float) -> float:
@@ -22,12 +52,12 @@ def _expected_score(rating_a: float, rating_b: float) -> float:
     return 1.0 / (1.0 + 10 ** ((rating_b - rating_a) / 400.0))
 
 
-def _mov_multiplier(score_diff: int) -> float:
+def _mov_multiplier_calc(score_diff: int, mov_mult: float) -> float:
     """得点差によるK補正 (大差の試合はレーティング変動を大きく)"""
-    return np.log(abs(score_diff) + 1) * MOV_MULTIPLIER + 1.0
+    return np.log(abs(score_diff) + 1) * mov_mult + 1.0
 
 
-def add_elo_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_elo_features(df: pd.DataFrame, sport_code=None) -> pd.DataFrame:
     """
     Eloレーティング特徴量を追加。
 
@@ -40,6 +70,8 @@ def add_elo_features(df: pd.DataFrame) -> pd.DataFrame:
 
     必要カラム: home_team_id, away_team_id, home_score, away_score, date
     """
+    k, ha, mov_m, season_reg = _get_elo_params(sport_code)
+
     df = df.sort_values("date").reset_index(drop=True)
 
     # チーム別Eloレーティング
@@ -69,8 +101,8 @@ def add_elo_features(df: pd.DataFrame) -> pd.DataFrame:
         for team_id in [home_id, away_id]:
             if last_year[team_id] is not None and last_year[team_id] != current_year:
                 elo[team_id] = (
-                    elo[team_id] * (1 - SEASON_REGRESSION)
-                    + INITIAL_RATING * SEASON_REGRESSION
+                    elo[team_id] * (1 - season_reg)
+                    + INITIAL_RATING * season_reg
                 )
             last_year[team_id] = current_year
 
@@ -82,7 +114,7 @@ def add_elo_features(df: pd.DataFrame) -> pd.DataFrame:
         elo_diffs.append(home_r - away_r)
 
         # ホームアドバンテージ込みの期待値
-        expected_home = _expected_score(home_r + HOME_ADVANTAGE, away_r)
+        expected_home = _expected_score(home_r + ha, away_r)
         elo_expected_list.append(expected_home)
 
         # 試合結果でElo更新
@@ -97,10 +129,10 @@ def add_elo_features(df: pd.DataFrame) -> pd.DataFrame:
             actual_home = 0.5
 
         # 得点差補正
-        mov = _mov_multiplier(int(home_score - away_score))
+        mov = _mov_multiplier_calc(int(home_score - away_score), mov_m)
 
         # Elo更新
-        delta = K_FACTOR * mov * (actual_home - expected_home)
+        delta = k * mov * (actual_home - expected_home)
         elo[home_id] += delta
         elo[away_id] -= delta
 

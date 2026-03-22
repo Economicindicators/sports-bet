@@ -56,6 +56,9 @@ class HandenomoriScraper(BaseScraper):
         """ハンデの森にログイン（環境変数から認証情報取得）"""
         user = os.environ.get("HANDENOMORI_USER")
         pw = os.environ.get("HANDENOMORI_PASS")
+        if not user or not pw:
+            logger.warning("HANDENOMORI_USER/PASS not set — handicaps will be hidden (member-only)")
+            return
         if user and pw:
             self.login(self.LOGIN_URL, {
                 "swpm_login_origination_flag": "1",
@@ -180,6 +183,7 @@ class HandenomoriScraper(BaseScraper):
         handi_table = detail.find("table", class_="single-handi")
         handicap_team = ""
         handicap_value = 0.0
+        handicap_display = ""
         if handi_table:
             tds = handi_table.find_all("td", class_="single-handi-handi")
             if len(tds) >= 2:
@@ -187,15 +191,15 @@ class HandenomoriScraper(BaseScraper):
                 away_handi = tds[1].get_text(strip=True)
 
                 if home_handi:
-                    # ホーム側にハンデ値 → ホームが有利（ハンデを背負う）
                     handicap_team = home_team
+                    handicap_display = home_handi
                     try:
                         handicap_value = self.parse_handicap_value(home_handi)
                     except ValueError:
                         return None
                 elif away_handi:
-                    # アウェイ側にハンデ値 → アウェイが有利
                     handicap_team = away_team
+                    handicap_display = away_handi
                     try:
                         handicap_value = self.parse_handicap_value(away_handi)
                     except ValueError:
@@ -219,6 +223,7 @@ class HandenomoriScraper(BaseScraper):
             handicap_team=handicap_team,
             handicap_value=handicap_value,
             league_code=league_code,
+            handicap_display=handicap_display,
             home_pitcher=home_pitcher,
             away_pitcher=away_pitcher,
         )

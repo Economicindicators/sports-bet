@@ -6,6 +6,7 @@ LOG_DIR="$HOME/sports-bet/logs"
 mkdir -p "$LOG_DIR"
 
 cd "$HOME/sports-bet"
+source .env 2>/dev/null || true
 source .venv/bin/activate
 
 echo "===== Snapshot daemon started $(date) =====" >> "$LOG_DIR/snapshot.log"

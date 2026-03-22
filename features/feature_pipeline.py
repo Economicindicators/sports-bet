@@ -115,12 +115,23 @@ def build_features(
     if sport_code is None:
         sport_code = df["sport_code"].iloc[0]
 
-    # ターゲット: ホームチームが勝つか (シンプル勝敗予測)
-    # scheduled試合はスコアがNone → targetもNaN
-    # EV計算時にハンデを後から考慮する
+    # ターゲット: スポーツ別に最適なターゲットを選択
     home_score = pd.to_numeric(df["home_score"], errors="coerce")
     away_score = pd.to_numeric(df["away_score"], errors="coerce")
-    df["target"] = (home_score > away_score).where(home_score.notna() & away_score.notna()).astype(float)
+    payout = pd.to_numeric(df["payout_rate"], errors="coerce")
+
+    if sport_code == "basketball":
+        # バスケ: ホーム勝敗ターゲット（ハンデが大きくデータ量が重要）
+        # EV計算時にスコア差分布でハンデを考慮
+        df["target"] = (home_score > away_score).where(
+            home_score.notna() & away_score.notna()
+        ).astype(float)
+    else:
+        # 野球・サッカー: ハンデカバーターゲット（ハンデが小さく直接予測が有効）
+        # payout_rate >= 1.5 (5分勝ち以上) → 1
+        df["target"] = (payout >= FAVORABLE_PAYOUT_THRESHOLD).where(
+            payout.notna()
+        ).astype(float)
 
     # ハンデチームがホームかどうか
     df["handicap_team_is_home"] = (
@@ -132,7 +143,7 @@ def build_features(
 
     # --- 共通特徴量 ---
     logger.info("Adding Elo ratings...")
-    df = add_elo_features(df)
+    df = add_elo_features(df, sport_code=sport_code)
 
     logger.info("Adding handicap features...")
     df = add_handicap_features(df)
@@ -185,6 +196,10 @@ def build_features(
         logger.info("Adding basketball features...")
         df = add_basketball_features(df)
 
+        from features.injury_features import add_injury_features
+        logger.info("Adding injury features...")
+        df = add_injury_features(df)
+
     # 特徴量カラムのリスト
     exclude_cols = {
         "match_id", "sport_code", "league_code", "date",
@@ -195,7 +210,46 @@ def build_features(
         "target", "handicap_team_is_home",
     }
 
-    feature_cols = [c for c in df.columns if c not in exclude_cols]
+    # ゼロ重要度特徴量（モデル学習で一度も使われなかった特徴量）
+    DEAD_FEATURES = {
+        "baseball": {
+            "away_back_to_back", "home_pitcher_recent_form",
+            "line_movement", "line_movement_abs", "has_line_movement",
+            "line_movement_midday", "consensus_home_prob", "consensus_away_prob",
+            "sharp_home_prob", "odds_dispersion", "sharp_soft_gap",
+            "implied_overround", "odds_count", "best_home_odds", "best_away_odds",
+            "odds_vs_handicap", "away_away_win_rate", "home_pitcher_fatigued",
+            "away_pitcher_fatigued", "is_npb", "home_rotation_fip",
+        },
+        "soccer": {
+            "away_wr_5", "away_wr_10", "h2h_away_wr", "h2h_count",
+            "home_games_7d", "away_games_7d", "home_back_to_back",
+            "away_back_to_back", "home_conceded_trend", "away_net_trend",
+            "line_movement", "line_movement_abs", "has_line_movement",
+            "line_movement_midday", "consensus_home_prob", "consensus_away_prob",
+            "sharp_home_prob", "odds_dispersion", "sharp_soft_gap",
+            "implied_overround", "odds_count", "best_home_odds", "best_away_odds",
+            "odds_vs_handicap", "home_home_win_rate", "h2h_cover_rate",
+        },
+        "basketball": {
+            "is_home_favorite", "elo_expected", "handicap_direction",
+            "away_wr_10", "away_wr_20", "away_games_7d", "home_back_to_back",
+            "away_back_to_back", "home_recent_form", "away_recent_form",
+            "home_recent_cover", "away_recent_cover",
+            "line_movement", "line_movement_abs", "has_line_movement",
+            "line_movement_midday", "consensus_home_prob", "consensus_away_prob",
+            "sharp_home_prob", "odds_dispersion", "sharp_soft_gap",
+            "implied_overround", "odds_count", "best_home_odds", "best_away_odds",
+            "odds_vs_handicap", "home_win_streak", "home_home_win_rate",
+            "away_away_win_rate", "home_b2b", "home_net_rtg",
+        },
+    }
+
+    dead = DEAD_FEATURES.get(sport_code, set())
+    feature_cols = [c for c in df.columns if c not in exclude_cols and c not in dead]
+    if dead:
+        removed = [c for c in df.columns if c in dead]
+        logger.info(f"Removed {len(removed)} dead features for {sport_code}")
 
     # NaN処理
     df[feature_cols] = df[feature_cols].fillna(0)

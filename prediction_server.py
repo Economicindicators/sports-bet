@@ -4,7 +4,11 @@ import json
 import logging
 import os
 import subprocess
+
+from dotenv import load_dotenv
+load_dotenv()
 import tempfile
+import pandas as pd
 from datetime import date, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -18,6 +22,7 @@ from config.constants import (
     LEAGUE_EV_THRESHOLD,
     LEAGUE_TO_SPORT,
     MIN_EV_THRESHOLD,
+    PROB_PICK_THRESHOLD,
     SPORT_TO_LEAGUES,
     SPORT_MODEL_VERSION,
 )
@@ -29,6 +34,38 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
 
 TURSO_DB = "sports-bet"
+
+# ── EV 3段階判定 ──
+# スポーツ別の閾値倍率でhigh/mid/low/passを判定
+def _ev_tier(ev: float, sport: str) -> str:
+    """EV値からtierを返す: high, mid, low, pass"""
+    # スポーツに属するリーグのEV閾値を取得
+    leagues = SPORT_TO_LEAGUES.get(sport, [])
+    base = MIN_EV_THRESHOLD
+    for lg in leagues:
+        if lg in LEAGUE_EV_THRESHOLD:
+            base = LEAGUE_EV_THRESHOLD[lg]
+            break
+    # high: base*1.5以上, mid: base以上, low: base*0.5以上, pass: それ未満
+    if ev >= base * 1.5:
+        return "high"
+    elif ev >= base:
+        return "mid"
+    elif ev >= base * 0.5:
+        return "low"
+    return "pass"
+
+
+def _ev_tier_label(ev: float, sport: str) -> str:
+    """EV値から表示ラベルを返す"""
+    tier = _ev_tier(ev, sport)
+    if tier == "high":
+        return "🔥 自信あり（期待値高）"
+    elif tier == "mid":
+        return "⚡ BET推奨（期待値あり）"
+    elif tier == "low":
+        return "🔍 様子見（期待値小）"
+    return "❌ PASS（見送り推奨）"
 TURSO_BIN = os.environ.get("TURSO_BIN", os.path.expanduser("~/.turso/turso"))
 
 
@@ -118,6 +155,11 @@ def extract_insights(row, sport: str, home_name: str, away_name: str, h_team: st
             "away_pace": g("away_pace"),
             "close_game_rate": g("home_close_game_rate"),
         }
+        insights["injuries"] = {
+            "home_impact": g("home_injury_impact"),
+            "away_impact": g("away_injury_impact"),
+            "impact_diff": g("injury_impact_diff"),
+        }
 
     return insights
 
@@ -129,14 +171,9 @@ def generate_commentary(insights: dict, pred_prob: float, handicap_ev: float, sp
     h_team = insights.get("handicap_team", "")
     lines = []
 
-    # ── 総合判定 ──
+    # ── 総合判定 (3段階) ──
     conf = "高" if pred_prob >= 0.6 else "中" if pred_prob >= 0.5 else "やや低"
-    if handicap_ev >= 0.08:
-        ev_label = "🔥 BET推奨（期待値高）"
-    elif handicap_ev >= 0.03:
-        ev_label = "⚡ やや有利（様子見）"
-    else:
-        ev_label = "❌ PASS（見送り推奨）"
+    ev_label = _ev_tier_label(handicap_ev, sport)
     lines.append(f"【総合判定】{ev_label}")
     lines.append(f"{h_team}のハンデ勝利予測: 確信度{conf}（{pred_prob*100:.1f}%）、EV +{handicap_ev*100:.1f}%")
 
@@ -288,15 +325,42 @@ def generate_commentary(insights: dict, pred_prob: float, handicap_ev: float, sp
             elif h_pace < 95 and a_pace < 95:
                 lines.append("【展開予想】両チームともロースコア傾向。接戦になる可能性が高い。")
 
+        # 欠場影響
+        inj = insights.get("injuries", {})
+        h_inj, a_inj = inj.get("home_impact", 0), inj.get("away_impact", 0)
+        if h_inj > 0 or a_inj > 0:
+            if h_inj > a_inj + 0.5:
+                lines.append(f"【欠場情報】{home}に主力欠場あり（影響度{h_inj:.1f}）。{away}有利の材料。")
+            elif a_inj > h_inj + 0.5:
+                lines.append(f"【欠場情報】{away}に主力欠場あり（影響度{a_inj:.1f}）。{home}有利の材料。")
+            else:
+                lines.append(f"【欠場情報】両チームとも欠場あり（{home}:{h_inj:.1f}, {away}:{a_inj:.1f}）。")
+
+    # ── 確率ベースPICK補足 ──
+    prob_thresh = PROB_PICK_THRESHOLD.get(sport, 0.55)
+    if pred_prob >= prob_thresh and handicap_ev < 0:
+        lines.append(f"【注目】確率は高い（{pred_prob*100:.1f}%）がハンデ構造上EVマイナス。参考情報として推奨。")
+
+    # ── 確信度 ──
+    confidence = "high" if pred_prob >= 0.60 else "medium" if pred_prob >= 0.50 else "low"
+    conf_label = {"high": "高確信", "medium": "中確信", "low": "低確信"}[confidence]
+    lines.append(f"【確信度】{conf_label}")
+
     # ── まとめ ──
-    if handicap_ev >= 0.08:
+    tier = _ev_tier(handicap_ev, sport)
+    if tier == "high":
+        lines.append(f"【結論】{h_team}ハンデ有利と判断。EV +{handicap_ev*100:.1f}%で自信を持って推奨。")
+    elif tier == "mid":
         lines.append(f"【結論】{h_team}ハンデ有利と判断。EV +{handicap_ev*100:.1f}%で賭ける価値あり。")
-    elif handicap_ev >= 0.03:
+    elif tier == "low":
         lines.append(f"【結論】{h_team}ハンデ有利だが期待値は小さい。慎重な判断を推奨。")
     else:
-        lines.append(f"【結論】{h_team}ハンデは期待値が低く、見送りが無難。")
+        if pred_prob >= prob_thresh:
+            lines.append(f"【結論】EVは低いが確率{pred_prob*100:.1f}%で{h_team}ハンデ有利の可能性。参考推奨。")
+        else:
+            lines.append(f"【結論】{h_team}ハンデは期待値が低く、見送りが無難。")
 
-    return "\n".join(lines)
+    return "\n".join(lines), confidence
 
 
 def generate_sns_text(pred: dict) -> str:
@@ -334,16 +398,28 @@ def generate_sns_text(pred: dict) -> str:
             date_str = f"{int(parts[1])}/{int(parts[2])}"
     time_str = f" {game_time}" if game_time else ""
 
-    # 判定
-    if ev >= 0.08:
-        verdict = "🔥 期待値高"
+    # 確信度
+    confidence = pred.get("confidence", "low")
+    conf_emoji = {"high": "🔥", "medium": "⚡", "low": "🔍"}.get(confidence, "🔍")
+
+    # 判定 (3段階 + 確率PICK)
+    tier = _ev_tier(ev, sport)
+    prob_thresh = PROB_PICK_THRESHOLD.get(sport, 0.55)
+    if tier == "high":
+        verdict = "🔥 自信あり"
         conf_bar = "★★★"
-    elif ev >= 0.03:
-        verdict = "⚡ やや有利"
+    elif tier == "mid":
+        verdict = "⚡ 期待値あり"
         conf_bar = "★★☆"
-    else:
+    elif tier == "low":
         verdict = "🔍 様子見"
         conf_bar = "★☆☆"
+    elif prob >= prob_thresh:
+        verdict = f"{conf_emoji} 確率推奨"
+        conf_bar = "★★☆" if confidence == "high" else "★☆☆"
+    else:
+        verdict = "❌ PASS"
+        conf_bar = "☆☆☆"
 
     # ハンデ表示
     h_sign = "+" if h_val > 0 else ""
@@ -359,6 +435,7 @@ def generate_sns_text(pred: dict) -> str:
         f"┣ ハンデ: {handi_str}",
         f"┣ 勝率: {prob*100:.1f}%",
         f"┣ 期待値: +{ev*100:.1f}%",
+        f"┣ 確信度: {conf_emoji} {confidence.upper()}",
         f"┗ 判定: {verdict} {conf_bar}",
     ]
 
@@ -432,6 +509,12 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
     """予測を生成して辞書リストで返す"""
     if version is None:
         version = SPORT_MODEL_VERSION.get(sport, "v1")
+
+    # バスケ予測時は欠場キャッシュをクリアして最新情報を取得
+    if sport == "basketball":
+        from features.injury_features import clear_injury_cache
+        clear_injury_cache()
+
     model = load_model(sport, version)
     df = load_matches_df(sport_code=sport, include_scheduled=True)
 
@@ -439,21 +522,38 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
         return []
 
     df, feature_cols = build_features(df, sport)
-    # モデルはホーム勝率を予測 → ハンデ値で補正してfavorable確率に変換
-    df["home_win_prob"] = model.predict_proba(df[feature_cols])
-    df["handicap_team_is_home"] = (df["handicap_team_id"] == df["home_team_id"]).astype(int)
-    df["pred_prob"] = df.apply(
-        lambda r: home_prob_to_handicap_prob(
-            r["home_win_prob"],
-            bool(r["handicap_team_is_home"]),
-            r.get("handicap_value", 0),
-            sport=sport,
-        ), axis=1
-    )
-    df["handicap_ev"] = df["pred_prob"].apply(calculate_handicap_ev)
+
+    if sport == "basketball":
+        # バスケ: ホーム勝率予測 → ハンデ有利チーム勝率に変換
+        df["home_win_prob"] = model.predict_proba(df[feature_cols])
+        df["handicap_team_is_home"] = (df["handicap_team_id"] == df["home_team_id"]).astype(int)
+        df["pred_prob"] = df.apply(
+            lambda r: home_prob_to_handicap_prob(
+                r["home_win_prob"],
+                bool(r["handicap_team_is_home"]),
+                r.get("handicap_value", 0),
+                sport=sport,
+            ), axis=1
+        )
+    else:
+        # 野球・サッカー: ハンデカバー確率を直接予測
+        df["pred_prob"] = model.predict_proba(df[feature_cols])
+    # EV計算: モデルがカバー確率を直接予測するので
+    # ハンデ表示を取得してハンデ構造に基づく正確なEVを算出
+    session_ev = get_session()
+    def _calc_ev_row(row):
+        mid = int(row["match_id"])
+        hd = session_ev.query(HandicapData).filter_by(match_id=mid).first()
+        h_display = hd.handicap_display or "" if hd else ""
+        h_value = hd.handicap_value or 0 if hd else 0
+        return calculate_handicap_ev(row["pred_prob"], h_value, h_display, sport)
+    df["handicap_ev"] = df.apply(_calc_ev_row, axis=1)
     df["kelly_frac"] = df["pred_prob"].apply(lambda p: kelly_fraction(p))
 
     cutoff = date.today() - timedelta(days=days_back)
+    # date列の型を統一（datetime64 or date object 両対応）
+    if pd.api.types.is_datetime64_any_dtype(df["date"]):
+        cutoff = pd.Timestamp(cutoff)
     recent = df[df["date"] >= cutoff].sort_values("date", ascending=False)
 
     if recent.empty:
@@ -488,7 +588,12 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
 
         league_code = match.league_code if match else ""
         league_ev_thresh = LEAGUE_EV_THRESHOLD.get(league_code, MIN_EV_THRESHOLD)
-        is_recommended = 1 if ev >= league_ev_thresh else 0
+        # PICK if EV >= threshold OR prob >= prob_threshold
+        ev_pick = ev >= league_ev_thresh
+        prob_pick = prob >= PROB_PICK_THRESHOLD.get(sport, 0.55)
+        is_recommended = 1 if (ev_pick or prob_pick) else 0
+
+        h_display = hd.handicap_display or "" if hd else ""
 
         pred = {
             "match_id": mid,
@@ -500,6 +605,7 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
             "away_team": away.name if away else "",
             "handicap_team": h_team,
             "handicap_value": h_val,
+            "handicap_display": h_display,
             "pred_prob": round(prob, 6),
             "handicap_ev": round(ev, 6),
             "kelly_fraction": round(float(row["kelly_frac"]), 6),
@@ -508,6 +614,7 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
             "status": status,
             "game_time": game_time,
             "ev_threshold": league_ev_thresh,
+            "ev_tier": _ev_tier(ev, sport),
             "is_recommended": is_recommended,
             "contrarian_team": "",
             "contrarian_ev": 0,
@@ -521,12 +628,14 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
             "commentary": "",
         }
         # 解説コメンタリーを生成
-        pred["commentary"] = generate_commentary(pred["insights"], prob, ev, sport)
+        commentary_text, confidence = generate_commentary(pred["insights"], prob, ev, sport)
+        pred["commentary"] = commentary_text
+        pred["confidence"] = confidence
         pred["sns_text"] = generate_sns_text(pred)
 
         # 逆張り: 通常EVが基準未満（PASS）なら逆側を同じレコードに追加
         if ev < CONTRARIAN_MIN_EV_THRESHOLD:
-            contrarian_ev = calculate_contrarian_ev(prob)
+            contrarian_ev = calculate_contrarian_ev(prob, h_val, h_display, sport)
             if contrarian_ev >= CONTRARIAN_MIN_EV_THRESHOLD:
                 if h_team == (home.name if home else ""):
                     contra_team = away.name if away else ""
@@ -544,82 +653,90 @@ def generate_predictions(sport: str, version: str = None, days_back: int = 7) ->
 
 
 def save_to_turso(predictions: list[dict]) -> int:
-    """予測をTursoに保存"""
+    """予測結果をTursoにlibsql_client経由で保存（turso CLI不要）"""
     if not predictions:
         return 0
 
-    lines = [
-        "CREATE TABLE IF NOT EXISTS predictions ("
-        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  match_id INTEGER NOT NULL,"
-        "  model_version TEXT NOT NULL,"
-        "  sport TEXT NOT NULL,"
-        "  date TEXT,"
-        "  home_team TEXT,"
-        "  away_team TEXT,"
-        "  handicap_team TEXT,"
-        "  handicap_value REAL,"
-        "  pred_prob REAL,"
-        "  handicap_ev REAL,"
-        "  kelly_fraction REAL,"
-        "  result_type TEXT,"
-        "  payout_rate REAL,"
-        "  status TEXT DEFAULT 'pending',"
-        "  ev_threshold REAL DEFAULT 0.08,"
-        "  is_recommended INTEGER DEFAULT 0,"
-        "  created_at TEXT DEFAULT (datetime('now')),"
-        "  UNIQUE(match_id, model_version)"
-        ");",
-    ]
+    import libsql_client
 
+    turso_url = os.environ.get("TURSO_DATABASE_URL", "")
+    turso_token = os.environ.get("TURSO_AUTH_TOKEN", "")
+
+    # .envから読み込み（フォールバック）
+    if not turso_url or not turso_token:
+        for env_path in [
+            os.path.join(os.path.dirname(__file__), ".env"),
+            os.path.expanduser("~/sports-bet-web/.env"),
+        ]:
+            if os.path.exists(env_path):
+                with open(env_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("TURSO_DATABASE_URL"):
+                            turso_url = turso_url or line.split("=", 1)[1].strip().strip('"')
+                        elif line.startswith("TURSO_AUTH_TOKEN"):
+                            turso_token = turso_token or line.split("=", 1)[1].strip().strip('"')
+
+    # libsql_client needs https:// URL (not libsql://) for HTTP mode
+    http_url = turso_url.replace("libsql://", "https://")
+    client = libsql_client.create_client_sync(url=http_url, auth_token=turso_token)
+
+    # Deduplicate: keep only highest EV per match (date + home + away)
+    dedup_map = {}
     for p in predictions:
-        esc = lambda s: str(s).replace("'", "''")
-        game_time = p.get('game_time', '')
-        lines.append(
-            f"INSERT OR REPLACE INTO predictions "
-            f"(match_id, model_version, sport, league, date, home_team, away_team, "
-            f"handicap_team, handicap_value, pred_prob, handicap_ev, kelly_fraction, "
-            f"result_type, payout_rate, status, game_time, "
-            f"ev_threshold, is_recommended, "
-            f"contrarian_team, contrarian_ev, contrarian_kelly, insights, commentary, sns_text) VALUES "
-            f"({p['match_id']}, '{esc(p['model_version'])}', '{esc(p['sport'])}', '{esc(p.get('league',''))}', '{esc(p['date'])}', "
-            f"'{esc(p['home_team'])}', '{esc(p['away_team'])}', '{esc(p['handicap_team'])}', {p['handicap_value']}, "
-            f"{p['pred_prob']}, {p['handicap_ev']}, {p['kelly_fraction']}, "
-            f"'{esc(p['result_type'])}', {p['payout_rate']}, '{esc(p['status'])}', '{esc(game_time)}', "
-            f"{p.get('ev_threshold', 0.08)}, {p.get('is_recommended', 0)}, "
-            f"'{esc(p.get('contrarian_team',''))}', {p.get('contrarian_ev', 0)}, {p.get('contrarian_kelly', 0)}, "
-            f"'{esc(json.dumps(p.get('insights', {}), ensure_ascii=False))}', "
-            f"'{esc(p.get('commentary', ''))}', "
-            f"'{esc(p.get('sns_text', ''))}');"
-        )
+        h, a = sorted([p["home_team"], p["away_team"]])
+        key = f"{p['date']}_{h}_{a}"
+        existing = dedup_map.get(key)
+        if not existing or p["handicap_ev"] > existing["handicap_ev"]:
+            dedup_map[key] = p
+    predictions = list(dedup_map.values())
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as f:
-        f.write("\n".join(lines))
-        sql_path = f.name
+    # Build batch statements
+    stmts = []
 
-    # First, try adding new columns (ignore errors if they already exist)
-    migrate_sql = (
-        "ALTER TABLE predictions ADD COLUMN ev_threshold REAL DEFAULT 0.08;\n"
-        "ALTER TABLE predictions ADD COLUMN is_recommended INTEGER DEFAULT 0;\n"
-    )
-    migrate_result = subprocess.run(
-        [TURSO_BIN, "db", "shell", TURSO_DB],
-        input=migrate_sql,
-        capture_output=True, text=True, timeout=30,
-    )
-    # Ignore migration errors (columns may already exist)
+    # Delete old pending predictions for the dates+sport being updated
+    dates_to_clean = set(p["date"] for p in predictions)
+    sports_to_clean = set(p["sport"] for p in predictions)
+    for d in dates_to_clean:
+        for s in sports_to_clean:
+            stmts.append(libsql_client.Statement(
+                "DELETE FROM predictions WHERE date = ? AND sport = ? AND status = 'pending'",
+                [d, s],
+            ))
 
-    result = subprocess.run(
-        [TURSO_BIN, "db", "shell", TURSO_DB],
-        stdin=open(sql_path),
-        capture_output=True, text=True, timeout=60,
-    )
+    # Insert predictions
+    for p in predictions:
+        stmts.append(libsql_client.Statement(
+            "INSERT OR REPLACE INTO predictions "
+            "(match_id, model_version, sport, league, date, home_team, away_team, "
+            "handicap_team, handicap_value, handicap_display, pred_prob, handicap_ev, kelly_fraction, "
+            "result_type, payout_rate, status, game_time, "
+            "ev_threshold, ev_tier, is_recommended, "
+            "contrarian_team, contrarian_ev, contrarian_kelly, insights, commentary, sns_text) VALUES "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                p["match_id"], p["model_version"], p["sport"], p.get("league", ""),
+                p["date"], p["home_team"], p["away_team"],
+                p["handicap_team"], p["handicap_value"], p.get("handicap_display", ""),
+                p["pred_prob"], p["handicap_ev"], p["kelly_fraction"],
+                p["result_type"], p["payout_rate"], p["status"], p.get("game_time", ""),
+                p.get("ev_threshold", 0.08), p.get("ev_tier", "pass"), p.get("is_recommended", 0),
+                p.get("contrarian_team", ""), p.get("contrarian_ev", 0), p.get("contrarian_kelly", 0),
+                json.dumps(p.get("insights", {}), ensure_ascii=False),
+                p.get("commentary", ""), p.get("sns_text", ""),
+            ],
+        ))
 
-    if result.returncode != 0:
-        logger.error(f"Turso error: {result.stderr}")
-        raise RuntimeError(f"Turso import failed: {result.stderr}")
+    # Execute all in one batch (single HTTP request)
+    try:
+        client.batch(stmts)
+        saved = len(predictions)
+    except Exception as e:
+        logger.error(f"Batch save failed: {e}")
+        saved = 0
 
-    return len(predictions)
+    client.close()
+    return saved
 
 
 class PredictionHandler(BaseHTTPRequestHandler):
@@ -711,6 +828,93 @@ class PredictionHandler(BaseHTTPRequestHandler):
                 self._json({"status": "ok", **result})
             except Exception as e:
                 logger.exception("Settle error")
+                self._json({"status": "error", "error": str(e)}, 500)
+
+        elif parsed.path == "/refresh":
+            # ハンデスクレイプ + オッズ取得 + 予測 + 乖離検出を一括実行
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(content_len)) if content_len else {}
+                sport = body.get("sport")
+
+                if sport:
+                    sports_list = [sport]
+                else:
+                    sports_list = list(SPORT_TO_LEAGUES.keys())
+
+                # Step 1: ハンデスクレイプ
+                all_leagues = []
+                for s in sports_list:
+                    all_leagues.extend(SPORT_TO_LEAGUES.get(s, []))
+
+                scrape_results = scrape_today(all_leagues)
+
+                # Step 2: オッズ取得
+                odds_count = 0
+                try:
+                    from scraper.odds_manager import OddsManager
+                    odds_mgr = OddsManager()
+                    for lg in all_leagues:
+                        try:
+                            odds_count += odds_mgr.scrape_odds_api(lg)
+                        except Exception:
+                            pass
+                    odds_mgr.close()
+                except Exception:
+                    pass
+
+                # Step 3: 予測生成 + 保存
+                total_preds = 0
+                total_saved = 0
+                for s in sports_list:
+                    try:
+                        preds = generate_predictions(s, days_back=7)
+                        total_preds += len(preds)
+                        saved = save_to_turso(preds)
+                        total_saved += saved
+                    except Exception as e:
+                        logger.warning(f"Predict error for {s}: {e}")
+
+                # Step 4: 乖離検出
+                edge_count = 0
+                try:
+                    from line_edge_detector import run_detection
+                    edge_result = run_detection(min_diff=0.5)
+                    edge_count = edge_result.get("detected", 0)
+                except Exception:
+                    pass
+
+                self._json({
+                    "status": "ok",
+                    "scrape": scrape_results,
+                    "odds": odds_count,
+                    "predictions": total_preds,
+                    "saved": total_saved,
+                    "edges": edge_count,
+                })
+            except Exception as e:
+                logger.exception("Refresh error")
+                self._json({"status": "error", "error": str(e)}, 500)
+
+        elif parsed.path == "/injuries":
+            try:
+                from scraper.injury_scraper import get_injury_alerts
+                alerts = get_injury_alerts(min_impact=0.5)
+                self._json({"status": "ok", "alerts": alerts, "count": len(alerts)})
+            except Exception as e:
+                logger.exception("Injury scrape error")
+                self._json({"status": "error", "error": str(e)}, 500)
+
+        elif parsed.path == "/edges":
+            try:
+                from line_edge_detector import run_detection
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(content_len)) if content_len else {}
+                min_diff = body.get("min_diff", 0.5)
+                result = run_detection(min_diff=min_diff)
+                self._json({"status": "ok", **result})
+            except Exception as e:
+                logger.exception("Edge detection error")
                 self._json({"status": "error", "error": str(e)}, 500)
 
         elif parsed.path == "/snapshot":

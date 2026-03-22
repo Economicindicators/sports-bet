@@ -212,6 +212,25 @@ class BookmakerOdds(Base):
     )
 
 
+class NbaTeamStats(Base):
+    """NBA チームアドバンスドスタッツ"""
+
+    __tablename__ = "nba_team_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    team_id = Column(Integer, ForeignKey("teams.team_id"), nullable=False)
+    season = Column(String, nullable=False)  # e.g. "2025-26"
+    stat_type = Column(String, nullable=False)  # off_rtg, def_rtg, net_rtg, pace, orb_pct, drb_pct, ast_pct, tov_pct
+    value = Column(Float, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    team = relationship("Team")
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "season", "stat_type", name="uq_nba_team_stat"),
+    )
+
+
 class Prediction(Base):
     """予測結果"""
 

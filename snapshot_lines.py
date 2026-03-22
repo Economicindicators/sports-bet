@@ -21,8 +21,8 @@ import time as time_mod
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
-from config.constants import ALL_LEAGUES
-from database.models import init_db, get_session, Match, HandicapData
+from config.constants import ALL_LEAGUES, LEAGUE_TO_SPORT, SPORT_TO_LEAGUES, SPORT_MODEL_VERSION
+from database.models import init_db, get_session, Match, HandicapData, Team
 from database.repository import Repository
 from scraper.manager import ScrapeManager
 
@@ -66,9 +66,36 @@ def determine_snapshot_type_for_match(match: Match, now: datetime) -> Optional[s
     return None
 
 
-def scrape_upcoming(target_date: date) -> dict:
-    """今日＋明日のデータをスクレイプ"""
+def get_current_handicaps(target_date: date) -> dict:
+    """現在DBに保存されているハンデ値を取得 (変更検知用)"""
+    session = get_session()
     tomorrow = target_date + timedelta(days=1)
+    matches = (
+        session.query(Match, HandicapData, Team)
+        .join(HandicapData, Match.match_id == HandicapData.match_id)
+        .join(Team, HandicapData.handicap_team_id == Team.team_id)
+        .filter(Match.date.in_([target_date, tomorrow]), Match.status == "scheduled")
+        .all()
+    )
+    snapshot = {}
+    for match, hd, team in matches:
+        snapshot[match.match_id] = {
+            "handicap_team": team.name,
+            "handicap_value": hd.handicap_value,
+            "handicap_display": hd.handicap_display or "",
+            "league": match.league_code,
+        }
+    session.close()
+    return snapshot
+
+
+def scrape_upcoming(target_date: date) -> tuple[dict, set]:
+    """今日＋明日のデータをスクレイプし、変更があったスポーツを返す"""
+    tomorrow = target_date + timedelta(days=1)
+
+    # スクレイプ前のハンデ状態を保存
+    before = get_current_handicaps(target_date)
+
     manager = ScrapeManager(use_cache=False)
     results = {}
 
@@ -82,7 +109,65 @@ def scrape_upcoming(target_date: date) -> dict:
             except Exception as e:
                 logger.warning(f"Scrape failed {league}/{d}: {e}")
 
-    return results
+    # スクレイプ後のハンデ状態と比較
+    after = get_current_handicaps(target_date)
+    changed_sports = set()
+
+    # 新規試合の検出
+    new_match_ids = set(after.keys()) - set(before.keys())
+    for mid in new_match_ids:
+        league = after[mid]["league"]
+        sport = LEAGUE_TO_SPORT.get(league, "")
+        if sport:
+            changed_sports.add(sport)
+            logger.info(f"[NEW] match:{mid} league:{league} handi:{after[mid]['handicap_value']}")
+
+    # ハンデ変更の検出
+    for mid in set(before.keys()) & set(after.keys()):
+        b, a = before[mid], after[mid]
+        if b["handicap_value"] != a["handicap_value"] or b["handicap_team"] != a["handicap_team"]:
+            league = a["league"]
+            sport = LEAGUE_TO_SPORT.get(league, "")
+            if sport:
+                changed_sports.add(sport)
+                logger.info(
+                    f"[CHANGED] match:{mid} league:{league} "
+                    f"{b['handicap_team']}:{b['handicap_value']} → {a['handicap_team']}:{a['handicap_value']}"
+                )
+
+    if changed_sports:
+        logger.info(f"Handicap changes detected for: {changed_sports}")
+    else:
+        logger.debug("No handicap changes")
+
+    return results, changed_sports
+
+
+def trigger_predictions(sports: set) -> int:
+    """変更があったスポーツの予測を即座に実行してTursoに保存"""
+    if not sports:
+        return 0
+
+    try:
+        from prediction_server import generate_predictions, save_to_turso
+    except ImportError:
+        logger.error("Cannot import prediction_server")
+        return 0
+
+    total_saved = 0
+    for sport in sports:
+        try:
+            predictions = generate_predictions(sport, days_back=7)
+            if predictions:
+                saved = save_to_turso(predictions)
+                total_saved += saved
+                logger.info(f"[AUTO-PREDICT] {sport}: {len(predictions)} generated, {saved} saved to Turso")
+            else:
+                logger.info(f"[AUTO-PREDICT] {sport}: no predictions generated")
+        except Exception as e:
+            logger.exception(f"[AUTO-PREDICT] {sport} error: {e}")
+
+    return total_saved
 
 
 def take_snapshots_smart(force_type: Optional[str] = None) -> dict:
@@ -95,8 +180,13 @@ def take_snapshots_smart(force_type: Optional[str] = None) -> dict:
     td = now.date()
     tomorrow = td + timedelta(days=1)
 
-    # Step 1: スクレイプして最新ハンデ値を取得
-    scrape_results = scrape_upcoming(td)
+    # Step 1: スクレイプして最新ハンデ値を取得 (変更検知付き)
+    scrape_results, changed_sports = scrape_upcoming(td)
+
+    # Step 1.5: ハンデ変更があれば即座に予測実行
+    auto_predicted = 0
+    if changed_sports:
+        auto_predicted = trigger_predictions(changed_sports)
 
     # Step 2: 今日＋明日のscheduled試合をチェック
     session = get_session()
@@ -162,11 +252,13 @@ def take_snapshots_smart(force_type: Optional[str] = None) -> dict:
     repo.commit()
     session.close()
 
-    logger.info(f"Saved {snapshot_count} snapshots")
+    logger.info(f"Saved {snapshot_count} snapshots, auto-predicted {auto_predicted}")
     return {
         "snapshots": snapshot_count,
         "details": details,
         "scrape": scrape_results,
+        "auto_predicted": auto_predicted,
+        "changed_sports": list(changed_sports) if changed_sports else [],
     }
 
 
@@ -269,8 +361,10 @@ def run_daemon():
             if result["snapshots"] > 0:
                 exported = export_snapshots_to_turso()
                 logger.info(f"Cycle done: {result['snapshots']} snapshots, {exported} exported")
-            else:
-                logger.debug("No snapshots needed this cycle")
+            if result.get("auto_predicted", 0) > 0:
+                logger.info(f"Auto-predicted: {result['auto_predicted']} for {result['changed_sports']}")
+            if result["snapshots"] == 0 and result.get("auto_predicted", 0) == 0:
+                logger.debug("No snapshots or predictions needed this cycle")
         except Exception as e:
             logger.exception(f"Daemon cycle error: {e}")
 

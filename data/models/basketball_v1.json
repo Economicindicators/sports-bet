@@ -90,6 +90,17 @@
     "away_pace",
     "pace_diff",
     "home_close_game_rate",
-    "home_blowout_rate"
+    "home_blowout_rate",
+    "home_b2b",
+    "home_off_rtg",
+    "away_off_rtg",
+    "home_def_rtg",
+    "away_def_rtg",
+    "home_net_rtg",
+    "away_net_rtg",
+    "off_rtg_diff",
+    "def_rtg_diff",
+    "home_matchup_edge",
+    "away_matchup_edge"
   ]
 }

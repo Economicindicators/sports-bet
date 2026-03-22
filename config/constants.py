@@ -137,9 +137,27 @@ STOP_LOSS_FRACTION = 0.30  # ストップロス
 # リーグ別EV閾値 (バックテスト最適化済み)
 # 未指定リーグは MIN_EV_THRESHOLD を使用
 LEAGUE_EV_THRESHOLD = {
-    "npb": 0.05,     # NPB: EV>=0.05でROI +0.8%
-    "mlb": 0.12,     # MLB: 閾値高めで損失抑制
-    "wbc": 0.05,     # WBC: NPBと同等
+    "npb": -0.03,    # NPB: EVマイナスでもprobが高ければPICK
+    "mlb": -0.03,    # MLB: 同上
+    "wbc": -0.03,    # WBC: 同上
+    "nba": 0.03,     # NBA: 閾値下げ
+    "bleague": 0.03,  # Bリーグ: 同上
+    "jleague": 0.02, # Jリーグ
+    "premier": 0.02, # プレミア
+    "laliga": 0.02,  # ラリーガ
+    "seriea": 0.02,  # セリエA
+    "bundesliga": 0.02,
+    "ligue1": 0.02,
+    "eredivisie": 0.02,
+    "cl": 0.02,
+}
+
+# ========== 確率ベースPICK閾値 ==========
+# EV基準では PASS でも、生の予測確率が高ければ PICK にする
+PROB_PICK_THRESHOLD = {
+    "baseball": 0.55,    # prob >= 55% → PICK
+    "basketball": 0.60,  # prob >= 60% → PICK
+    "soccer": 0.58,      # prob >= 58% → PICK
 }
 
 # ========== 逆張り (Contrarian) ==========
@@ -174,7 +192,7 @@ SPORT_TO_LEAGUES = {
 
 # スポーツ → モデルバージョン
 SPORT_MODEL_VERSION = {
-    "baseball": "v4",
-    "soccer": "v1",
-    "basketball": "v1",
+    "baseball": "v5",
+    "soccer": "v3",
+    "basketball": "v4",
 }

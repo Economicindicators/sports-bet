@@ -26,6 +26,9 @@ def add_baseball_features(df: pd.DataFrame) -> pd.DataFrame:
     # === リーグ特性 ===
     df = _add_league_context(df)
 
+    # === 球場タイプ (ドーム/屋外) ===
+    df = _add_venue_type(df)
+
     # === 交互作用項 ===
     df = _add_interactions(df)
 
@@ -202,6 +205,27 @@ def _add_league_context(df: pd.DataFrame) -> pd.DataFrame:
 
     df["league_avg_total_runs"] = league_run_feature
 
+    return df
+
+
+def _add_venue_type(df: pd.DataFrame) -> pd.DataFrame:
+    """球場タイプ: ドーム球場かどうか (得点傾向に影響)"""
+    if "venue" not in df.columns:
+        df["is_dome"] = 0
+        return df
+
+    def _check_dome(venue: object) -> int:
+        if pd.isna(venue):
+            return 0
+        v = str(venue).lower()
+        # "ドーム" covers 東京ドーム, PayPayドーム, バンテリンドーム, 京セラドーム, ベルーナドーム etc.
+        # "dome" covers MLB dome stadiums
+        # "エスコン" = エスコンフィールド (retractable roof, usually closed)
+        if "ドーム" in v or "dome" in v or "エスコン" in v:
+            return 1
+        return 0
+
+    df["is_dome"] = df["venue"].apply(_check_dome)
     return df
 
 

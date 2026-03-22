@@ -108,24 +108,36 @@ def walk_forward_backtest(
             X_train.iloc[split:], y_train.iloc[split:],
         )
 
-        # 予測: ホーム勝率 → ハンデ補正 → EV
         probs = model.predict_proba(X_test)
         test_df = df.loc[test_mask].copy()
-        test_df["home_win_prob"] = probs
-
         sport_code = test_df["sport_code"].iloc[0] if "sport_code" in test_df.columns else "baseball"
-        test_df["handicap_team_is_home"] = (
-            test_df["handicap_team_id"] == test_df["home_team_id"]
-        ).astype(int)
-        test_df["pred_prob"] = test_df.apply(
-            lambda r: home_prob_to_handicap_prob(
-                r["home_win_prob"],
-                bool(r["handicap_team_is_home"]),
+
+        if sport_code == "basketball":
+            # バスケ: ホーム勝率 → ハンデ有利チーム勝率に変換
+            test_df["home_win_prob"] = probs
+            test_df["handicap_team_is_home"] = (
+                test_df["handicap_team_id"] == test_df["home_team_id"]
+            ).astype(int)
+            test_df["pred_prob"] = test_df.apply(
+                lambda r: home_prob_to_handicap_prob(
+                    r["home_win_prob"],
+                    bool(r["handicap_team_is_home"]),
+                    r.get("handicap_value", 0),
+                    sport=sport_code,
+                ), axis=1
+            )
+        else:
+            # 野球・サッカー: ハンデカバー確率を直接予測
+            test_df["pred_prob"] = probs
+
+        test_df["handicap_ev"] = test_df.apply(
+            lambda r: calculate_handicap_ev(
+                r["pred_prob"],
                 r.get("handicap_value", 0),
-                sport=sport_code,
+                r.get("handicap_display", ""),
+                sport_code,
             ), axis=1
         )
-        test_df["handicap_ev"] = test_df["pred_prob"].apply(calculate_handicap_ev)
 
         # フィルタ
         bet_df = test_df[test_df["handicap_ev"] >= ev_threshold]

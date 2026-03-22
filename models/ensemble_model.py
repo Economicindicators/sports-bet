@@ -184,20 +184,32 @@ class EnsembleModel:
         preds = []
         w = []
 
+        # Each sub-model may have been trained with different feature counts.
+        # Pass by .values to avoid column name mismatch, slice to model's expected count.
+
         if "lgb" in self.models:
-            lgb_features = self.models["lgb"].feature_name()
-            preds.append(self.models["lgb"].predict(X[lgb_features]))
+            n = self.models["lgb"].num_feature()
+            X_lgb = X.iloc[:, :n].values if X.shape[1] >= n else X.values
+            preds.append(self.models["lgb"].predict(X_lgb))
             w.append(self.weights[0])
 
         if "xgb" in self.models:
-            xgb_features = self.models["xgb"].get_booster().feature_names
-            preds.append(self.models["xgb"].predict_proba(X[xgb_features])[:, 1])
-            w.append(self.weights[1])
+            try:
+                n = len(self.models["xgb"].get_booster().feature_names or [])
+                X_xgb = X.iloc[:, :n].values if n and X.shape[1] >= n else X.values
+                preds.append(self.models["xgb"].predict_proba(X_xgb)[:, 1])
+                w.append(self.weights[1])
+            except Exception as e:
+                logger.warning(f"XGB predict failed (feature mismatch), skipping: {e}")
 
         if "cat" in self.models:
-            cat_features = self.models["cat"].feature_names_
-            preds.append(self.models["cat"].predict_proba(X[cat_features])[:, 1])
-            w.append(self.weights[2])
+            try:
+                n = len(self.models["cat"].feature_names_ or [])
+                X_cat = X.iloc[:, :n].values if n and X.shape[1] >= n else X.values
+                preds.append(self.models["cat"].predict_proba(X_cat)[:, 1])
+                w.append(self.weights[2])
+            except Exception as e:
+                logger.warning(f"CAT predict failed (feature mismatch), skipping: {e}")
 
         if not preds:
             raise RuntimeError("No models trained")

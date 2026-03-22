@@ -115,27 +115,26 @@ class BHandicapScraper(BaseScraper):
 
         handicap_team = ""
         handicap_value = 0.0
+        handicap_display = ""
 
         home_handi_text = home_handi.get_text(strip=True) if home_handi else ""
         away_handi_text = away_handi.get_text(strip=True) if away_handi else ""
 
         if home_handi_text:
             handicap_team = home_team
-            try:
-                handicap_value = float(home_handi_text)
-            except ValueError:
+            handicap_display = home_handi_text
+            handicap_value = self._parse_handicap_value(home_handi_text)
+            if handicap_value is None:
                 return None
         elif away_handi_text:
             handicap_team = away_team
-            try:
-                handicap_value = float(away_handi_text)
-            except ValueError:
+            handicap_display = away_handi_text
+            handicap_value = self._parse_handicap_value(away_handi_text)
+            if handicap_value is None:
                 return None
         else:
-            # ハンデなし（まだ発表されていない）— 試合情報のみ保存
             pass
 
-        # ハンデ未発表でもhome_teamをデフォルトに設定して試合を保存
         if not handicap_team:
             handicap_team = home_team
             handicap_value = 0.0
@@ -169,7 +168,18 @@ class BHandicapScraper(BaseScraper):
             handicap_team=handicap_team,
             handicap_value=handicap_value,
             league_code=league_code,
+            handicap_display=handicap_display,
         )
+
+    @staticmethod
+    def _parse_handicap_value(text: str) -> Optional[float]:
+        """ハンデ文字列を数値に変換。'半' は .5 に置換。"""
+        text = text.strip().replace("半", ".5")
+        try:
+            return float(text)
+        except ValueError:
+            logger.warning(f"Cannot parse handicap value: {text}")
+            return None
 
     def _extract_team_name(self, td: Tag) -> str:
         """team-data tdからチーム名を取得 (span要素を除く)"""

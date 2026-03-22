@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config.constants import (
+    CACHE_EXPIRY_HOURS,
     MAX_RETRIES,
     REQUEST_TIMEOUT,
     SCRAPE_DELAY_MAX,
@@ -62,6 +63,11 @@ class BaseScraper:
             return None
         path = self._get_cache_path(url)
         if path.exists():
+            age_hours = (time.time() - path.stat().st_mtime) / 3600
+            if age_hours > CACHE_EXPIRY_HOURS:
+                logger.debug(f"Cache expired ({age_hours:.1f}h): {url}")
+                path.unlink()
+                return None
             logger.debug(f"Cache hit: {url}")
             return path.read_text(encoding="utf-8")
         return None
@@ -78,10 +84,45 @@ class BaseScraper:
         host = urlparse(url).hostname or ""
         return any(d in host for d in self.SSL_VERIFY_SKIP_DOMAINS)
 
+    def _cookie_path(self, login_url: str) -> Path:
+        """Cookie保存パス"""
+        domain = login_url.split("//")[-1].split("/")[0].replace(".", "_")
+        return self.cache_dir / f"cookies_{domain}.json"
+
+    def _load_cookies(self, login_url: str) -> bool:
+        """保存済みCookieを読み込み"""
+        import json
+        cookie_path = self._cookie_path(login_url)
+        if cookie_path.exists():
+            try:
+                with open(cookie_path) as f:
+                    cookies = json.load(f)
+                for name, value in cookies.items():
+                    self.session.cookies.set(name, value)
+                self._logged_in = True
+                logger.info(f"Loaded saved cookies for {login_url}")
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _save_cookies(self, login_url: str) -> None:
+        """Cookieをファイルに保存"""
+        import json
+        cookie_path = self._cookie_path(login_url)
+        cookies = {c.name: c.value for c in self.session.cookies}
+        with open(cookie_path, "w") as f:
+            json.dump(cookies, f)
+
     def login(self, login_url: str, payload: dict) -> bool:
-        """サイトにログインしてセッションCookieを取得"""
+        """サイトにログインしてセッションCookieを取得（Cookie永続化対応）"""
         if self._logged_in:
             return True
+
+        # 保存済みCookieを試す
+        if self._load_cookies(login_url):
+            return True
+
         try:
             self._rate_limit()
             r = self.session.post(
@@ -94,7 +135,8 @@ class BaseScraper:
             self._last_request_time = time.time()
             self._logged_in = r.status_code == 200
             if self._logged_in:
-                logger.info(f"Logged in to {login_url}")
+                self._save_cookies(login_url)
+                logger.info(f"Logged in to {login_url} (cookies saved)")
             else:
                 logger.warning(f"Login failed ({r.status_code})")
             return self._logged_in

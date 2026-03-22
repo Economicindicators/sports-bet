@@ -1,19 +1,7 @@
 {
-  "params": {
-    "objective": "binary",
-    "metric": "binary_logloss",
-    "num_leaves": 31,
-    "max_depth": 5,
-    "learning_rate": 0.01,
-    "n_estimators": 3000,
-    "min_child_samples": 20,
-    "subsample": 0.7,
-    "colsample_bytree": 0.6,
-    "reg_alpha": 1.0,
-    "reg_lambda": 5.0,
-    "verbosity": -1,
-    "bagging_freq": 5
-  },
+  "sport": "soccer",
+  "version": "v2",
+  "type": "ensemble",
   "feature_names": [
     "is_home_favorite",
     "home_elo",
@@ -64,6 +52,20 @@
     "away_net_trend",
     "home_recent_cover",
     "away_recent_cover",
+    "line_movement",
+    "line_movement_abs",
+    "has_line_movement",
+    "line_movement_midday",
+    "consensus_home_prob",
+    "consensus_away_prob",
+    "sharp_home_prob",
+    "odds_dispersion",
+    "sharp_soft_gap",
+    "implied_overround",
+    "odds_count",
+    "best_home_odds",
+    "best_away_odds",
+    "odds_vs_handicap",
     "home_elo_velocity",
     "away_elo_velocity",
     "home_win_streak",
@@ -76,5 +78,13 @@
     "home_draw_rate",
     "away_draw_rate",
     "league_avg_goals"
-  ]
+  ],
+  "train_samples": 6367,
+  "test_samples": 1365,
+  "test_auc": 0.5106,
+  "params": {
+    "lgb": "31leaves_d4",
+    "xgb": "d4",
+    "cat": "d4"
+  }
 }
